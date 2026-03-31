@@ -61,7 +61,7 @@ struct hart_state {
 	 * flags (see below). */
 	_Atomic(uint32_t) flags;
 
-	/* Per-hart "Are we in probe mode" flag (stelios)*/
+	/* Per-hart probe_mode flag */
 	int32_t probe_mode;
 
 	/* See timer.c */
