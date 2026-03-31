@@ -18,8 +18,5 @@ clean:
 test:
 	$(MAKE) -C sdk -f sdk.mk test TARGET=$(TARGET) ORIGINAL_PWD=$(CURDIR)
 
-info:
-	$(MAKE) -C sdk -f sdk.mk riscv_info TARGET=$(TARGET) ORIGINAL_PWD=$(CURDIR)
-
 dtb:
 	$(MAKE) -C sdk -f sdk.mk dtb TARGET=$(TARGET) ORIGINAL_PWD=$(CURDIR)
