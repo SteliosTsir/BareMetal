@@ -171,49 +171,6 @@ print_big_endian_support(struct rvcaps *caps)
 		INF("  None\n");
 }
 
-#include <platform/riscv/csr.h> /* Για να έχουμε το csr_read και CSR_MISA */
-
-static void print_isa_profiles(struct rvcaps *caps)
-{
-    /* Read basic bits from misa to get the base architecture */
-    unsigned long misa_val = csr_read(CSR_MISA);
-    int mxl = (misa_val >> 62) & 0x3;
-    int bits = (mxl == 1) ? 32 : ((mxl == 2) ? 64 : ((mxl == 3) ? 128 : 64));
-    char base_isa = (misa_val & CSR_MISA_I) ? 'I' : 'E';
-
-    INF("\nBase Architecture:\n");
-    INF("  RV%d%c (%d bits)\n", bits, base_isa, bits);
-
-    int has_i = (base_isa == 'I');
-    int has_s = (caps->s_caps & CAP_S) ? 1 : 0;
-    
-    /* RVA Base */
-    int is_rva_base = has_i && 
-                      (caps->r_caps & CAP_M) && 
-                      (caps->r_caps & CAP_A) && 
-                      (caps->r_caps & CAP_F) && 
-                      (caps->r_caps & CAP_D) && 
-                      (caps->r_caps & CAP_C);
-                      
-    int is_rva22_base = is_rva_base && (caps->r_caps & CAP_V);
-
-    INF("\nISA Profiles:\n");
-    INF("  RVI20U32 : %s\n", (bits == 32 && has_i) ? "Yes" : "No");
-    INF("  RVI20U64 : %s\n", (bits == 64 && has_i) ? "Yes" : "No");
-    
-    INF("  RVA20U64 : %s\n", (bits == 64 && is_rva_base) ? "Yes" : "No");
-    INF("  RVA20S64 : %s\n", (bits == 64 && is_rva_base && has_s) ? "Yes" : "No");
-    
-    INF("  RVA22U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
-    INF("  RVA22S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
-    
-    INF("  RVA23U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
-    INF("  RVA23S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
-    
-    INF("  RVB23U64 : No (Requires Z-ext parsing)\n");
-    INF("  RVB23S64 : No (Requires Z-ext parsing)\n");
-}
-
 static int
 print_caps(void)
 {
@@ -266,8 +223,6 @@ print_caps(void)
 		uint16_t vlen = vlenb * 8;
 		INF("Vector Length (VLEN): %u bits (%u bytes)\n", vlen, vlenb);
 	}
-
-	print_isa_profiles(&caps);
 
 	INF("\nPress a key to continue...\n");
 	return 0;

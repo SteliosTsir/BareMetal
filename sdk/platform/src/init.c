@@ -19,12 +19,16 @@
 #include <platform/riscv/hart.h>	/* For hart_get_count/state() */
 #include <platform/utils/utils.h>	/* For console output */
 
+extern void hart_probe_priv_caps(struct rvcaps *caps);
+extern void print_riscv_info(struct rvcaps *caps); // Η δική σου συνάρτηση από το άλλο αρχείο!
+
 void
 platform_init_default(void)
 {
 	uart_init();
 	ANN("BareMetal loader (c) FORTH/CARV 2026\n\r");
 	ANN("------------------------------------\n\r");
+	
 	DBG("Boot hart_id: %li\n", csr_read(CSR_MHARTID));
 
 	#if (PLAT_MAX_HARTS > 1)

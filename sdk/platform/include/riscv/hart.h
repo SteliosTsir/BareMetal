@@ -40,7 +40,8 @@ struct hart_state {
 		/* Caps set by early boot code (hart_init_*) */
 		uint64_t early_caps;
 		/* Pointer to a struct with more complex
-		 * capability infos (wip) */
+		 * capability infos
+		 */
 		void* caps;
 	};
 

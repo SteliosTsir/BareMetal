@@ -13,13 +13,16 @@ YALIBC_OBJ_DIR = $(OBJ_DIR)/yalibc
 PLATFORM_OBJ_DIR = $(OBJ_DIR)/platform
 
 # SDK CFLAGS (SDK includes already in CFLAGS from build.mk)
-SDK_CFLAGS = $(CFLAGS) -DDEBUG
-
+SDK_CFLAGS = $(CFLAGS) -DDEBUG -fno-lto -fno-builtin
 # Source files
 YALIBC_SOURCES = $(wildcard yalibc/src/*.c)
 PLATFORM_C_SOURCES = $(wildcard platform/src/*.c)
 PLATFORM_S_SOURCES = $(wildcard platform/src/*.S)
 TESTSUITE_SOURCES = $(wildcard testsuite/*.c testsuite/yalibc/*.c testsuite/platform/*.c)
+
+# my custom riscv_info
+RISCV_INFO_SOURCES = $(wildcard riscv_info/*.c)
+RISCV_INFO_OBJ_DIR = $(OBJ_DIR)/riscv_info
 
 # Object directories for testsuite
 TESTSUITE_OBJ_DIR = $(OBJ_DIR)/testsuite
@@ -47,7 +50,7 @@ TESTSUITE_BINS = $(foreach target,$(ALL_TARGETS),$(BUILD_DIR)/bm_testsuite.$(tar
 # Testsuite linker script
 TESTSUITE_LDSCRIPT = testsuite/test_sections.ld
 
-.PHONY: all clean libs ldscripts testsuite test dtb help
+.PHONY: all clean libs ldscripts testsuite test dtb help info riscv_info
 
 all: ldscripts libs testsuite
 
@@ -123,6 +126,10 @@ $(PLATFORM_OBJ_DIR): | $(OBJ_DIR)
 $(TESTSUITE_OBJ_DIR): | $(OBJ_DIR)
 	@mkdir -p $(TESTSUITE_OBJ_DIR)
 
+$(RISCV_INFO_OBJ_DIR): | $(OBJ_DIR)
+	@mkdir -p $(RISCV_INFO_OBJ_DIR)
+
+
 # Generate linker scripts - pattern rule for any target
 $(LDSCRIPT_DIR)/bmmap.%.ld: $(LDSCRIPT_TEMPLATE) | $(LDSCRIPT_DIR)
 	$(MSG) "  [CPP]  $@"
@@ -150,6 +157,14 @@ $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/platform/%.c | $$(TESTSUITE_OBJ_DIR) $
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
 endef
 
+define RISCV_INFO_OBJ_RULES
+RISCV_INFO_OBJS_$(1) = $$(patsubst riscv_info/%.c,$$(RISCV_INFO_OBJ_DIR)/%.$(1).o,$$(RISCV_INFO_SOURCES))
+
+$$(RISCV_INFO_OBJ_DIR)/%.$(1).o: riscv_info/%.c | $$(RISCV_INFO_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -DDEBUG -c $$< -o $$@
+endef
+
 # Define a function to create build rules for each target
 define TARGET_RULES
 # Build platform C objects for $(1)
@@ -173,10 +188,20 @@ $$(BUILD_DIR)/bm_testsuite.$(1): $$(TESTSUITE_OBJS_$(1)) $$(BUILD_DIR)/libplatfo
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) $$(TESTSUITE_OBJS_$(1)) $$(call PLATFORM_LIB,$(1)) -o $$@.elf $$(LOPTS) -T $$(LDSCRIPT_DIR)/bmmap.$(1).ld -T $$(TESTSUITE_LDSCRIPT)
 	$$(MSG) "  [BIN]  $$@.bin"
 	$$(Q)$$(OBJCOPY) $$(CPOPS) $$@.elf $$@.bin
+
+# Build riscv_info binary for $(1)
+$$(BUILD_DIR)/riscv_info.$(1): $$(RISCV_INFO_OBJS_$(1)) $$(BUILD_DIR)/libplatform_$(1).a $$(LDSCRIPT_DIR)/bmmap.$(1).ld
+	$$(MSG) "  [LD]   $$@.elf"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) $$(RISCV_INFO_OBJS_$(1)) $$(BUILD_DIR)/libplatform_$(1).a -o $$@.elf $$(LOPTS) -T $$(LDSCRIPT_DIR)/bmmap.$(1).ld
+	$$(MSG) "  [BIN]  $$@.bin"
+	$$(Q)$$(OBJCOPY) $$(CPOPS) $$@.elf $$@.bin
 endef
 
 # Generate testsuite object rules for all targets
 $(foreach target,$(ALL_TARGETS),$(eval $(call TESTSUITE_OBJ_RULES,$(target))))
+
+# Generate riscv_info object rules for all targets
+$(foreach target,$(ALL_TARGETS),$(eval $(call RISCV_INFO_OBJ_RULES,$(target))))
 
 # Generate rules for all targets
 $(foreach target,$(ALL_TARGETS),$(eval $(call TARGET_RULES,$(target))))
@@ -187,5 +212,15 @@ clean:
 	rm -rf $(LDSCRIPT_DIR)
 	rm -f $(BUILD_DIR)/libplatform_*.a
 	rm -rf $(BUILD_DIR)/bm_testsuite.*
+	rm -rf $(BUILD_DIR)/riscv_info.*
+
+riscv_info:
+ifndef TARGET
+	@echo "Error: TARGET not specified. Usage: make TARGET=<target> hello"
+	@exit 1
+endif
+	$(MAKE) -f sdk.mk $(BUILD_DIR)/riscv_info.$(TARGET)
+	@echo "Running riscv_info for target: $(TARGET)"
+	@ORIGINAL_PWD=$(ORIGINAL_PWD) bash $(SDK_TARGETS_DIR)/$(TARGET)/run.sh $(BUILD_DIR)/riscv_info.$(TARGET).bin
 
 .DEFAULT_GOAL := all

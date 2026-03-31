@@ -1,0 +1,87 @@
+#include <stdio.h>
+#include <stdint.h>
+
+#define MISA_H_EXT (1UL << 7)
+#define MISA_V_EXT (1UL << 21) 
+
+void print_cpu_info(void) {
+    unsigned long misa_val;
+    __asm__ volatile("csrr %0, misa" : "=r"(misa_val));
+
+    // ==========================================
+    // Base Architecture & Bits
+    // ==========================================
+    int mxl = (misa_val >> 62) & 0x3;
+    int bits = (mxl == 1) ? 32 : ((mxl == 2) ? 64 : ((mxl == 3) ? 128 : 0));
+    
+    //if (bits == 0) bits = 64; //fallback 
+
+    // Base ISA
+    char base_isa = (misa_val & (1UL << 4)) ? 'E' : 'I';
+
+    printf("\nBase architecture\n=================\n");
+    printf(" RV%d%c (%d bits)\n\n", bits, base_isa, bits);
+
+    if(misa_val & MISA_H_EXT || misa_val & MISA_V_EXT){
+        printf("========================================\n");
+        printf(" - Hypervisor (H) Extension : %s\n", (misa_val & MISA_H_EXT) ? "YES" : "NO");
+        printf(" - Vector (V) Extension     : %s\n", (misa_val & MISA_V_EXT) ? "YES" : "NO");
+        printf("========================================\n\n");
+    }
+
+    // ==========================================
+    // ISA extensions (A-Z)
+    // ==========================================
+    printf("Total ISA extensions\n==============\n");
+    int ext_count = 0;
+    char exts[27];
+    
+    for (int i = 0; i < 26; i++) {
+        if (misa_val & (1UL << i)) {
+            exts[ext_count++] = 'A' + i;
+        }
+    }
+    exts[ext_count] = '\0';
+    
+    printf("Found %d extensions: %s\n\n", ext_count, exts);
+
+    // ==========================================
+    // ISA profiles (approximation)
+    // ==========================================
+    int has_i = (misa_val & (1UL << 8)) != 0;
+    int has_s = (misa_val & (1UL << 18)) != 0; // Supervisor mode 
+    int has_v = (misa_val & (1UL << 21)) != 0; // Vector
+
+    unsigned long mask_imafdc = (1UL<<8) | (1UL<<12) | (1UL<<0) | (1UL<<5) | (1UL<<3) | (1UL<<2);
+    int has_imafdc = ((misa_val & mask_imafdc) == mask_imafdc);
+
+    int is_rva_base = has_imafdc;
+    int is_rva22_base = has_imafdc && has_v;
+
+    printf("ISA profiles\n============\n");
+    printf("  RVI20U32 : %s\n", (bits == 32 && has_i) ? "Yes" : "No");
+    printf("  RVI20U64 : %s\n", (bits == 64 && has_i) ? "Yes" : "No");
+    
+    printf("  RVA20U64 : %s\n", (bits == 64 && is_rva_base) ? "Yes" : "No");
+    printf("  RVA20S64 : %s\n", (bits == 64 && is_rva_base && has_s) ? "Yes" : "No");
+    
+    printf("  RVA22U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
+    printf("  RVA22S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
+    
+    printf("  RVA23U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
+    printf("  RVA23S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
+    
+    printf("  RVB23U64 : No (Requires Z-ext parsing)\n");
+    printf("  RVB23S64 : No (Requires Z-ext parsing)\n\n");
+}
+
+int main(void) {
+
+    print_cpu_info();
+
+    while (1) {
+        __asm__ volatile("wfi"); 
+    }
+
+    return 0;
+}

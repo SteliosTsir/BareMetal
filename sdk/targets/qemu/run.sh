@@ -26,7 +26,7 @@ else
 	fi
 fi
 
-qemu-system-riscv64 -machine virt${DTB_OPT} -serial stdio -nographic -monitor null -s -bios none \
+qemu-system-riscv64 -machine virt${DTB_OPT} -cpu rv64,v=true,h=true -serial stdio -nographic -monitor null -s -bios none \
 		    -smp 4 -m 2G -global virtio-mmio.force-legacy=false  \
 		    -netdev user,id=net0${TFTP_OPT} \
 		    -device virtio-net-device,netdev=net0 \

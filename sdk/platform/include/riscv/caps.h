@@ -133,6 +133,11 @@ struct rvcaps {
 	uint64_t z_caps;
 };
 
+/**
+ * (Stelios Tsirindanis) declare hart_probe_priv_caps so it can be used in main
+ */
+extern void hart_probe_priv_caps(struct rvcaps *caps);
+
 #endif
 
 #endif /* _CAPS_H */
