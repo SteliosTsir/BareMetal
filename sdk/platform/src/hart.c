@@ -301,6 +301,13 @@ hart_exception_handler(void) {
 				hs->error = ENOSYS;
 				goto skip;
 			}
+
+			if (hs->probe_mode == 1) {
+                DBG("Probe Mode: Ignored illegal instruction: %#.8x\n", ill_inst);
+                hs->error = ENOSYS; 
+                goto skip;          
+            }
+
 			ERR("Illegal instruction at 0x%lx, mtval: 0x%lx\n", mepc, mtval);
 			break;
 		case CAUSE_INST_ACCESS_FAULT:

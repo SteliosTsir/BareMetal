@@ -11,6 +11,7 @@
 #include <platform/riscv/caps.h>	/* For CAP_* macros */
 #include <platform/utils/utils.h>	/* For ANN/INF */
 #include <test_framework.h>		/* For test registration macros */
+#include "z_extensions.h"
 
 #include <stdint.h>			/* For typed ints */
 
@@ -171,8 +172,6 @@ print_big_endian_support(struct rvcaps *caps)
 		INF("  None\n");
 }
 
-#include <platform/riscv/csr.h> /* Για να έχουμε το csr_read και CSR_MISA */
-
 static void print_isa_profiles(struct rvcaps *caps)
 {
     /* Read basic bits from misa to get the base architecture */
@@ -212,6 +211,34 @@ static void print_isa_profiles(struct rvcaps *caps)
     
     INF("  RVB23U64 : No (Requires Z-ext parsing)\n");
     INF("  RVB23S64 : No (Requires Z-ext parsing)\n");
+	
+}
+
+void probe_and_print_z_extensions(void) {
+    INF("\nUnprivileged Z-Extensions (via Hardware Trap Probing):\n");
+
+    /* Bit Manipulation */
+    INF("  Bit Manipulation:\n");
+    INF("    Zba (Address generation)      : %s\n", check_zba_extension() ? "Yes" : "No");
+    INF("    Zbb (Basic bit-manipulation)  : %s\n", check_zbb_extension() ? "Yes" : "No");
+    INF("    Zbc (Carry-less multiply)     : %s\n", check_zbc_extension() ? "Yes" : "No");
+    INF("    Zbs (Single-bit operations)   : %s\n", check_zbs_extension() ? "Yes" : "No");
+
+    /* Conditional Operations */
+    INF("  Conditional Operations:\n");
+    INF("    Zicond (Integer conditionals) : %s\n", check_zicond_extension() ? "Yes" : "No");
+
+    /* Atomics */
+    INF("  Atomics:\n");
+    INF("    Zawrs (Wait-on-reservation)   : %s\n", check_zawrs_extension() ? "Yes" : "No");
+    INF("    Zacas (Compare-and-swap)      : %s\n", check_zacas_extension() ? "Yes" : "No");
+    INF("    Zabha (Byte/halfword atomics) : %s\n", check_zabha_extension() ? "Yes" : "No");
+
+    /* Floating-Point */
+    INF("  Floating-Point:\n");
+    INF("    Zfh (Half-precision FP)       : %s\n", check_zfh_extension() ? "Yes" : "No");
+    INF("    Zfa (Additional FP)           : %s\n", check_zfa_extension() ? "Yes" : "No");
+
 }
 
 static int
@@ -268,6 +295,8 @@ print_caps(void)
 	}
 
 	print_isa_profiles(&caps);
+
+	probe_and_print_z_extensions();
 
 	INF("\nPress a key to continue...\n");
 	return 0;
