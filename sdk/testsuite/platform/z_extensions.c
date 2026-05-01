@@ -1,4 +1,4 @@
-#include "z_extensions.h"
+#include "../include/z_extensions.h"
 
 int check_zba_extension(void) {
     struct hart_state *hs = hart_get_hstate_self();

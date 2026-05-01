@@ -11,7 +11,7 @@
 #include <platform/riscv/caps.h>	/* For CAP_* macros */
 #include <platform/utils/utils.h>	/* For ANN/INF */
 #include <test_framework.h>		/* For test registration macros */
-#include "z_extensions.h"
+#include "../include/z_extensions.h"
 
 #include <stdint.h>			/* For typed ints */
 
