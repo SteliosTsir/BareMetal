@@ -1,11 +1,15 @@
 # BareMetal Top-Level Makefile
 
-.PHONY: all clean sdk test dtb help
+.PHONY: all clean sdk test dtb help litmus
 
-all: sdk
+all: sdk litmus
 
 help:
 	$(MAKE) -C sdk -f sdk.mk help
+
+litmus:
+	@echo "Generating Litmus Tests..."
+	$(MAKE) -C sdk -f sdk.mk litmus
 
 sdk:
 	@echo "Building SDK..."

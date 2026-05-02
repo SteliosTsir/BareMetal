@@ -12,6 +12,31 @@ OBJ_DIR = $(BUILD_DIR)/.obj
 YALIBC_OBJ_DIR = $(OBJ_DIR)/yalibc
 PLATFORM_OBJ_DIR = $(OBJ_DIR)/platform
 
+# Litmus directories
+
+LITMUS_GEN = ../tools/litmus_gen
+LITMUS_SRC_DIR = $(CURDIR)/../litmus_tests
+LITMUS_OUT_DIR = testsuite/litmus
+
+# Προσοχή: Προσθέτουμε /*.litmus ΣΤΟ ΤΕΛΟΣ του wildcard
+LITMUS_FILES = $(wildcard $(LITMUS_SRC_DIR)/*.litmus)
+
+# Αυτό θα μετατρέψει το ../litmus_tests/test.litmus σε $(OBJ_DIR)/testsuite/litmus/test.c
+GENERATED_C = $(patsubst $(LITMUS_SRC_DIR)/%.litmus, $(LITMUS_OUT_DIR)/%.c, $(LITMUS_FILES))
+
+$(LITMUS_OUT_DIR):
+	mkdir -p $(LITMUS_OUT_DIR)
+
+$(LITMUS_OUT_DIR)/%.c: $(LITMUS_SRC_DIR)/%.litmus | $(LITMUS_OUT_DIR)
+	@echo "[LITMUS] Generating $@ from $<"
+	$(LITMUS_GEN) $< $@
+
+litmus: $(GENERATED_C)
+	@echo "Source directory: $(LITMUS_SRC_DIR)"
+	@echo "Found litmus files: $(LITMUS_FILES)"
+	@echo "Generated C files list: $(GENERATED_C)"
+	@echo "[DONE] All litmus tests parsed and ready in $(LITMUS_OUT_DIR)"
+
 # SDK CFLAGS (SDK includes already in CFLAGS from build.mk)
 SDK_CFLAGS = $(CFLAGS) -DDEBUG
 
@@ -19,7 +44,7 @@ SDK_CFLAGS = $(CFLAGS) -DDEBUG
 YALIBC_SOURCES = $(wildcard yalibc/src/*.c)
 PLATFORM_C_SOURCES = $(wildcard platform/src/*.c)
 PLATFORM_S_SOURCES = $(wildcard platform/src/*.S)
-TESTSUITE_SOURCES = $(wildcard testsuite/*.c testsuite/yalibc/*.c testsuite/platform/*.c)
+TESTSUITE_SOURCES = $(wildcard testsuite/*.c testsuite/yalibc/*.c testsuite/platform/*.c $(LITMUS_OUT_DIR)/*.c)
 
 # Object directories for testsuite
 TESTSUITE_OBJ_DIR = $(OBJ_DIR)/testsuite
@@ -76,6 +101,8 @@ ldscripts: $(LDSCRIPTS)
 libs: $(LIBS)
 
 testsuite: $(TESTSUITE_BINS)
+
+testsuite: litmus $(TESTSUITE_BINS)
 
 # Test target - requires TARGET variable to be set
 test:
@@ -137,6 +164,10 @@ $(YALIBC_OBJ_DIR)/%.o: yalibc/src/%.c | $(YALIBC_OBJ_DIR) $(BUILD_DIR)
 define TESTSUITE_OBJ_RULES
 TESTSUITE_OBJS_$(1) = $$(patsubst %.c,$$(TESTSUITE_OBJ_DIR)/%.$(1).o,$$(notdir $$(TESTSUITE_SOURCES)))
 
+$$(TESTSUITE_OBJ_DIR)/%.$(1).o: $$(LITMUS_OUT_DIR)/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
+
 $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
 	$$(MSG) "  [CC]   $$@"
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
@@ -187,5 +218,6 @@ clean:
 	rm -rf $(LDSCRIPT_DIR)
 	rm -f $(BUILD_DIR)/libplatform_*.a
 	rm -rf $(BUILD_DIR)/bm_testsuite.*
+	rm -rf $(LITMUS_OUT_DIR)
 
 .DEFAULT_GOAL := all

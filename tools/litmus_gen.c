@@ -1,0 +1,186 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+char *trim(char *str) {
+    char *end;
+    while(isspace((unsigned char)*str)) str++;
+    if(*str == 0) return str;
+    end = str + strlen(str) - 1;
+    while(end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+    return str;
+}
+
+void replace_all(char *str, const char *old_str, const char *new_str) {
+    char buffer[4096] = {0}; // Μεγαλύτερο buffer για ασφάλεια
+    char *insert_point = &buffer[0];
+    const char *tmp = str;
+    size_t len_old = strlen(old_str);
+    size_t len_new = strlen(new_str);
+
+    while (1) {
+        const char *p = strstr(tmp, old_str);
+        if (p == NULL) {
+            strcpy(insert_point, tmp);
+            break;
+        }
+        memcpy(insert_point, tmp, p - tmp);
+        insert_point += p - tmp;
+        memcpy(insert_point, new_str, len_new);
+        insert_point += len_new;
+        tmp = p + len_old;
+    }
+    strcpy(str, buffer);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 3) {
+        printf("Litmus Transpiler V2.1 (Dynamic Register Support)\n");
+        printf("Usage: %s <input.litmus> <output.c>\n", argv[0]);
+        return 1;
+    }
+
+    FILE *fin = fopen(argv[1], "r");
+    FILE *fout = fopen(argv[2], "w");
+    if (!fin || !fout) { perror("File error"); return 1; }
+
+    char line[512];
+    int state = 0; // 0: Start, 1: Init Block, 2: Assembly
+    
+    char p0_code[2048] = "";
+    char p1_code[2048] = "";
+    char exists_cond[1024] = "";
+    char p0_init[1024] = "";
+    char p1_init[1024] = "";
+    char test_name[128] = "Unknown";
+
+    // Grab Test Name
+    if (fgets(line, sizeof(line), fin)) {
+        char *p = strstr(line, "RISCV");
+        if (p) strcpy(test_name, trim(p + 5)); 
+    }
+
+    while (fgets(line, sizeof(line), fin)) {
+        if (strchr(line, '{')) { state = 1; continue; }
+        if (state == 1 && strchr(line, '}')) { state = 0; continue; }
+        
+        if (state == 1) {
+            char *token = strtok(line, ";");
+            while (token != NULL) {
+                token = trim(token);
+                if (strlen(token) > 2) {
+                    int core; char reg[10], val[32];
+                    if (sscanf(token, "%d:%[^=]=%s", &core, reg, val) == 3) {
+                        char c_val[64];
+                        if (isalpha(val[0])) sprintf(c_val, "(uintptr_t)&%s", val);
+                        else sprintf(c_val, "%s", val);
+
+                        if (core == 0) sprintf(p0_init + strlen(p0_init), "    %s = %s;\n", reg, c_val);
+                        if (core == 1) sprintf(p1_init + strlen(p1_init), "    %s = %s;\n", reg, c_val);
+                    }
+                }
+                token = strtok(NULL, ";");
+            }
+        }
+
+        if (strstr(line, "P0") && strstr(line, "P1")) { state = 2; continue; }
+        if (strstr(line, "exists")) {
+            state = 0;
+            fgets(exists_cond, sizeof(exists_cond), fin);
+            trim(exists_cond);
+            break;
+        }
+
+        if (state == 2) {
+            char *sep = strchr(line, '|');
+            if (sep) {
+                *sep = '\0';
+                char *p0_part = trim(line);
+                char *p1_part = trim(sep + 1);
+                char *semi = strchr(p1_part, ';');
+                if (semi) *semi = '\0';
+                p1_part = trim(p1_part);
+
+                // --- SMART LABEL REPLACEMENT ---
+                // Μετατρέπει τα LC00: σε 1: και τα άλματα προς αυτά σε 1f (forward)
+                char final_p0[256], final_p1[256];
+                strcpy(final_p0, p0_part);
+                strcpy(final_p1, p1_part);
+
+                // Αν η γραμμή περιέχει ορισμό label (π.χ. LC00:)
+                if (strstr(final_p0, "LC00:")) replace_all(final_p0, "LC00:", "1:");
+                if (strstr(final_p1, "LC00:")) replace_all(final_p1, "LC00:", "1:");
+
+                // Αν η γραμμή περιέχει άλμα προς το label (π.χ. bne x5,x0,LC00)
+                if (strstr(final_p0, "LC00")) replace_all(final_p0, "LC00", "1f");
+                if (strstr(final_p1, "LC00")) replace_all(final_p1, "LC00", "1f");
+                // -------------------------------
+
+                if(strlen(final_p0) > 0) { 
+                    strcat(p0_code, "        \""); strcat(p0_code, final_p0); strcat(p0_code, "\\n\"\n"); 
+                }
+                if(strlen(final_p1) > 0) { 
+                    strcat(p1_code, "        \""); strcat(p1_code, final_p1); strcat(p1_code, "\\n\"\n"); 
+                }
+            }
+        }
+    }
+    fclose(fin);
+
+    // Condition translation
+    replace_all(exists_cond, "/\\", " && ");
+    replace_all(exists_cond, "\\/", " || ");
+    replace_all(exists_cond, "=", " == ");
+    replace_all(exists_cond, "0:", "core0_");
+    replace_all(exists_cond, "1:", "core1_");
+
+    // Start Generation
+    fprintf(fout, "/* Auto-generated by CARV Litmus Transpiler V2.1 */\n");
+    fprintf(fout, "#include \"../include/litmus_framework.h\"\n\n");
+    fprintf(fout, "DEFINE_LITMUS_STATE()\n\n");
+    
+    fprintf(fout, "/* Dynamic Results for verification (x5-x15 covering most tests) */\n");
+    for (int core = 0; core < 2; core++) {
+        for (int r = 5; r <= 15; r++) {
+            fprintf(fout, "static volatile uintptr_t core%d_x%d = 0;\n", core, r);
+        }
+    }
+    fprintf(fout, "\n");
+
+    /* --- CORE 1 --- */
+    fprintf(fout, "static void core1_receiver(void) {\n");
+    fprintf(fout, "    LITMUS_CORE1_WAIT()\n");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "    register uintptr_t x%d __asm__(\"x%d\") = 0;\n", i, i);
+    fprintf(fout, "    /* Apply Init State */\n%s\n", p1_init);
+    fprintf(fout, "    __asm__ volatile (\n%s", p1_code);
+    fprintf(fout, "        : ");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "\"+r\"(x%d)%s", i, (i == 15) ? "" : ", ");
+    fprintf(fout, "\n        : : \"memory\"\n    );\n\n");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "    core1_x%d = x%d;\n", i, i);
+    fprintf(fout, "    __asm__ volatile (\"wfi\");\n}\n\n");
+
+    /* --- CORE 0 --- */
+    fprintf(fout, "static int test_litmus_auto(void) {\n");
+    fprintf(fout, "    ANN(\"\\n---=== Litmus Test: %s ===---\\n\");\n", test_name);
+    fprintf(fout, "    if (hart_get_count() < 2) return 1;\n");
+    fprintf(fout, "    LITMUS_CORE0_START(core1_receiver)\n\n");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "    register uintptr_t x%d __asm__(\"x%d\") = 0;\n", i, i);
+    fprintf(fout, "    /* Apply Init State */\n%s\n", p0_init);
+    fprintf(fout, "    __asm__ volatile (\n%s", p0_code);
+    fprintf(fout, "        : ");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "\"+r\"(x%d)%s", i, (i == 15) ? "" : ", ");
+    fprintf(fout, "\n        : : \"memory\"\n    );\n\n");
+    for (int i = 5; i <= 15; i++) fprintf(fout, "    core0_x%d = x%d;\n", i, i);
+    fprintf(fout, "    for(volatile int i=0; i<1000; i++);\n\n");
+    fprintf(fout, "    if %s {\n", exists_cond);
+    fprintf(fout, "        WRN(\"MEMORY REORDERING DETECTED!\\n\");\n    } else {\n");
+    fprintf(fout, "        INF(\"Result: Strict ordering maintained.\\n\");\n    }\n    return 0;\n}\n\n");
+
+    fprintf(fout, "REGISTER_PLATFORM_TEST(\"Litmus Test: %s\", test_litmus_auto);\n", test_name);
+
+    fclose(fout);
+    printf("Successfully compiled Litmus syntax to C!\n");
+    return 0;
+}
