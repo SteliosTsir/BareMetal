@@ -14,7 +14,7 @@ char *trim(char *str) {
 }
 
 void replace_all(char *str, const char *old_str, const char *new_str) {
-    char buffer[4096] = {0}; // Μεγαλύτερο buffer για ασφάλεια
+    char buffer[4096] = {0}; 
     char *insert_point = &buffer[0];
     const char *tmp = str;
     size_t len_old = strlen(old_str);
@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
     if (!fin || !fout) { perror("File error"); return 1; }
 
     char line[512];
-    int state = 0; // 0: Start, 1: Init Block, 2: Assembly
+    int state = 0;
     
     char p0_code[2048] = "";
     char p1_code[2048] = "";
@@ -103,17 +103,14 @@ int main(int argc, char *argv[]) {
                 if (semi) *semi = '\0';
                 p1_part = trim(p1_part);
 
-                // --- SMART LABEL REPLACEMENT ---
-                // Μετατρέπει τα LC00: σε 1: και τα άλματα προς αυτά σε 1f (forward)
+                // --- LABEL REPLACEMENT ---
                 char final_p0[256], final_p1[256];
                 strcpy(final_p0, p0_part);
                 strcpy(final_p1, p1_part);
 
-                // Αν η γραμμή περιέχει ορισμό label (π.χ. LC00:)
                 if (strstr(final_p0, "LC00:")) replace_all(final_p0, "LC00:", "1:");
                 if (strstr(final_p1, "LC00:")) replace_all(final_p1, "LC00:", "1:");
 
-                // Αν η γραμμή περιέχει άλμα προς το label (π.χ. bne x5,x0,LC00)
                 if (strstr(final_p0, "LC00")) replace_all(final_p0, "LC00", "1f");
                 if (strstr(final_p1, "LC00")) replace_all(final_p1, "LC00", "1f");
                 // -------------------------------

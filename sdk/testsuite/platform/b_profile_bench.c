@@ -55,7 +55,7 @@ static int test_b_profile_perf(void) {
     }
 
     /* ==========================================================
-     * 2. Zbb: Basic Bit Manipulation (cpop - Count Population)
+     * 2. Zbb: Basic Bit Manipulation
      * ========================================================== */
     if (check_zbb_extension()) {
         INF("\n[2] Benchmarking Zbb (Population Count)...\n");
