@@ -22,5 +22,8 @@ clean:
 test:
 	$(MAKE) -C sdk -f sdk.mk test TARGET=$(TARGET) ORIGINAL_PWD=$(CURDIR)
 
+arch_tests:
+	$(MAKE) -C sdk -f sdk.mk arch_tests ORIGINAL_PWD=$(CURDIR)
+
 dtb:
 	$(MAKE) -C sdk -f sdk.mk dtb TARGET=$(TARGET) ORIGINAL_PWD=$(CURDIR)

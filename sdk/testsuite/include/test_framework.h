@@ -19,6 +19,7 @@ struct test_entry {
 
 #define YALIBC_TEST_SECTION __attribute__((section("__tests_yalibc"), used, aligned(16)))
 #define PLATFORM_TEST_SECTION __attribute__((section("__tests_platform"), used, aligned(16)))
+#define ARCH_TEST_SECTION __attribute__((section("__tests_arch"), used, aligned(16)))
 
 #define REGISTER_YALIBC_TEST(desc, func) \
 	static const struct test_entry __test_yalibc_##func YALIBC_TEST_SECTION = { \
@@ -32,9 +33,17 @@ struct test_entry {
 		.test_fn = func \
 	}
 
+#define REGISTER_ARCH_TEST(desc, func) \
+	static const struct test_entry __test_arch_##func ARCH_TEST_SECTION = { \
+		.description = desc, \
+		.test_fn = func \
+	}
+
 extern struct test_entry __start_rodata_tests_yalibc[];
 extern struct test_entry __stop_rodata_tests_yalibc[];
 extern struct test_entry __start_rodata_tests_platform[];
 extern struct test_entry __stop_rodata_tests_platform[];
+extern struct test_entry __start_rodata_tests_arch[];
+extern struct test_entry __stop_rodata_tests_arch[];
 
 #endif

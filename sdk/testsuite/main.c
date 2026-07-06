@@ -13,6 +13,7 @@
 #include <platform/riscv/csr.h>		/* For pause() */
 #include <stdio.h>			/* For getchar(), EOF */
 #include <errno.h>			/* For EAGAIN */
+#include "arch_tests.h"
 
 static void
 print_category_menu(void)
@@ -23,6 +24,7 @@ print_category_menu(void)
 	INF("Select test category:\n");
 	INF("\t1 -> YaLibC tests\n");
 	INF("\t2 -> Platform tests\n");
+	INF("\t3 -> Architecture tests\n");
 }
 
 static void
@@ -103,6 +105,14 @@ main(void)
 					__start_rodata_tests_platform,
 					__stop_rodata_tests_platform,
 					"Platform Tests"
+				);
+				INF("\nTotal failures across all tests: %i\n", total_failures);
+				break;
+			case '3':
+				total_failures += run_test_category(
+					__start_rodata_tests_arch,
+					__stop_rodata_tests_arch,
+					"Architecture Tests"
 				);
 				INF("\nTotal failures across all tests: %i\n", total_failures);
 				break;

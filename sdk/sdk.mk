@@ -7,6 +7,23 @@ include build.mk
 # Discover all targets from subdirectories under targets/
 ALL_TARGETS := $(notdir $(wildcard $(SDK_TARGETS_DIR)/*))
 
+# --- ARCH TESTS CONFIG ---
+ARCH_GEN = ../tools/arch_gen.sh
+ARCH_SRC_DIR = $(CURDIR)/../tests/arch_src
+ARCH_OUT_DIR = testsuite/arch
+
+ARCH_FILES = $(wildcard $(ARCH_SRC_DIR)/*.S)
+GENERATED_ARCH_S = $(patsubst $(ARCH_SRC_DIR)/%.S, $(ARCH_OUT_DIR)/%.S, $(ARCH_FILES))
+GENERATED_ARCH_C = $(ARCH_OUT_DIR)/arch_registry.c
+
+$(ARCH_OUT_DIR):
+	mkdir -p $(ARCH_OUT_DIR)
+
+$(GENERATED_ARCH_C) $(GENERATED_ARCH_S): $(ARCH_FILES) | $(ARCH_OUT_DIR)
+	@$(ARCH_GEN) $(ARCH_SRC_DIR) $(ARCH_OUT_DIR)
+
+arch_tests: $(GENERATED_ARCH_S) $(GENERATED_ARCH_C)
+
 # Object directories
 OBJ_DIR = $(BUILD_DIR)/.obj
 YALIBC_OBJ_DIR = $(OBJ_DIR)/yalibc
@@ -38,13 +55,18 @@ litmus: $(GENERATED_C)
 	@echo "[DONE] All litmus tests parsed and ready in $(LITMUS_OUT_DIR)"
 
 # SDK CFLAGS (SDK includes already in CFLAGS from build.mk)
-SDK_CFLAGS = $(CFLAGS) -DDEBUG
+ARCH_TEST_FLAGS = -D__riscv_xlen=64 -DRVTEST_RV64I -DDEBUG -DTEST_FLEN=64 -DUDB_MXLEN=64 
 
+# -DRVMODEL_BOOT="run_test_$(TEST_NAME)"
+
+SDK_CFLAGS = $(CFLAGS) 
+SDK_CFLAGS += $(ARCH_TEST_FLAGS)
 # Source files
 YALIBC_SOURCES = $(wildcard yalibc/src/*.c)
 PLATFORM_C_SOURCES = $(wildcard platform/src/*.c)
 PLATFORM_S_SOURCES = $(wildcard platform/src/*.S)
-TESTSUITE_SOURCES = $(wildcard testsuite/*.c testsuite/yalibc/*.c testsuite/platform/*.c $(LITMUS_OUT_DIR)/*.c)
+
+TESTSUITE_SOURCES = $(wildcard testsuite/*.c testsuite/yalibc/*.c testsuite/platform/*.c $(LITMUS_OUT_DIR)/*.c) $(GENERATED_ARCH_C) $(GENERATED_ARCH_S)
 
 # Object directories for testsuite
 TESTSUITE_OBJ_DIR = $(OBJ_DIR)/testsuite
@@ -72,7 +94,7 @@ TESTSUITE_BINS = $(foreach target,$(ALL_TARGETS),$(BUILD_DIR)/bm_testsuite.$(tar
 # Testsuite linker script
 TESTSUITE_LDSCRIPT = testsuite/test_sections.ld
 
-.PHONY: all clean libs ldscripts testsuite test dtb help
+.PHONY: all clean libs ldscripts testsuite test dtb help litmus arch_tests
 
 all: ldscripts libs testsuite
 
@@ -102,7 +124,7 @@ libs: $(LIBS)
 
 testsuite: $(TESTSUITE_BINS)
 
-testsuite: litmus $(TESTSUITE_BINS)
+testsuite: litmus arch_tests $(TESTSUITE_BINS)
 
 # Test target - requires TARGET variable to be set
 test:
@@ -154,7 +176,9 @@ $(TESTSUITE_OBJ_DIR): | $(OBJ_DIR)
 $(LDSCRIPT_DIR)/bmmap.%.ld: $(LDSCRIPT_TEMPLATE) | $(LDSCRIPT_DIR)
 	$(MSG) "  [CPP]  $@"
 	$(Q)$(CPP) -I $(SDK_PLATFORM_INCLUDE) -I $(SDK_TARGETS_DIR)/$* -P -o $@ $<
-
+	$(Q)sed -i '$$d' $@ 
+	$(Q)echo "  .data.signature : { *(.rodata.sig_*) } > ram" >> $@
+	$(Q)echo "}" >> $@   # Ξανακλείνει την αγκύλη
 # Build yalibc objects (platform-independent)
 $(YALIBC_OBJ_DIR)/%.o: yalibc/src/%.c | $(YALIBC_OBJ_DIR) $(BUILD_DIR)
 	$(MSG) "  [CC]   $@"
@@ -162,7 +186,9 @@ $(YALIBC_OBJ_DIR)/%.o: yalibc/src/%.c | $(YALIBC_OBJ_DIR) $(BUILD_DIR)
 
 # Build testsuite objects (common for all targets, but need to be built per-target for includes)
 define TESTSUITE_OBJ_RULES
-TESTSUITE_OBJS_$(1) = $$(patsubst %.c,$$(TESTSUITE_OBJ_DIR)/%.$(1).o,$$(notdir $$(TESTSUITE_SOURCES)))
+TESTSUITE_OBJS_C_$(1) = $$(patsubst %.c,$$(TESTSUITE_OBJ_DIR)/%.$(1).o,$$(filter %.c,$$(notdir $$(TESTSUITE_SOURCES))))
+TESTSUITE_OBJS_S_$(1) = $$(patsubst %.S,$$(TESTSUITE_OBJ_DIR)/%.$(1).S.o,$$(filter %.S,$$(notdir $$(TESTSUITE_SOURCES))))
+TESTSUITE_OBJS_$(1) = $$(TESTSUITE_OBJS_C_$(1)) $$(TESTSUITE_OBJS_S_$(1))
 
 $$(TESTSUITE_OBJ_DIR)/%.$(1).o: $$(LITMUS_OUT_DIR)/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
 	$$(MSG) "  [CC]   $$@"
@@ -179,6 +205,13 @@ $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/yalibc/%.c | $$(TESTSUITE_OBJ_DIR) $$(
 $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/platform/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
 	$$(MSG) "  [CC]   $$@"
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
+$$(TESTSUITE_OBJ_DIR)/%.$(1).o: $$(ARCH_OUT_DIR)/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -I testsuite/include/arch_env -DDEBUG -c $$< -o $$@
+
+$$(TESTSUITE_OBJ_DIR)/%.$(1).S.o: $$(ARCH_OUT_DIR)/%.S | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [AS]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -I testsuite/include/arch_env -DDEBUG -c $$< -o $$@
 endef
 
 # Define a function to create build rules for each target
@@ -201,7 +234,11 @@ $$(BUILD_DIR)/libplatform_$(1).a: $$(ALL_OBJS_$(1))
 # Build testsuite binary for $(1)
 $$(BUILD_DIR)/bm_testsuite.$(1): $$(TESTSUITE_OBJS_$(1)) $$(BUILD_DIR)/libplatform_$(1).a $$(LDSCRIPT_DIR)/bmmap.$(1).ld
 	$$(MSG) "  [LD]   $$@.elf"
-	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) $$(TESTSUITE_OBJS_$(1)) $$(call PLATFORM_LIB,$(1)) -o $$@.elf $$(LOPTS) -T $$(LDSCRIPT_DIR)/bmmap.$(1).ld -T $$(TESTSUITE_LDSCRIPT)
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) \
+	-Wl,--whole-archive $$(TESTSUITE_OBJS_$(1)) -Wl,--no-whole-archive \
+	$$(call PLATFORM_LIB,$(1)) \
+	-o $$@.elf $$(LOPTS) \
+	-T $$(LDSCRIPT_DIR)/bmmap.$(1).ld -T $$(TESTSUITE_LDSCRIPT)
 	$$(MSG) "  [BIN]  $$@.bin"
 	$$(Q)$$(OBJCOPY) $$(CPOPS) $$@.elf $$@.bin
 endef
@@ -219,5 +256,6 @@ clean:
 	rm -f $(BUILD_DIR)/libplatform_*.a
 	rm -rf $(BUILD_DIR)/bm_testsuite.*
 	rm -rf $(LITMUS_OUT_DIR)
+	rm -rf $(ARCH_OUT_DIR)
 
 .DEFAULT_GOAL := all

@@ -51,11 +51,12 @@ CFLAGS += -I $(GCC_INCLUDE)
 
 # LTO settings - mandatory for all builds
 # When debugging comment this out and uncomment the one below
-CFLAGS += -flto=auto
+#CFLAGS += -flto=auto
 #CFLAGS += -ffunction-sections -fdata-sections -g
+CFLAGS += -fno-lto -mcmodel=medany -msmall-data-limit=0
 
 # Linker options
-LOPTS = -lgcc -Wl,--relax,--orphan-handling=warn,--no-dynamic-linker,--gc-sections,--print-gc-sections,--strip-discarded
+LOPTS = -lgcc -Wl,--relax,--orphan-handling=warn,--no-dynamic-linker,--gc-sections,--print-gc-sections,--strip-discarded,--orphan-handling=place
 
 # Helper function to generate platform library linking flags for LTO
 # Usage: $(call PLATFORM_LIB,target)

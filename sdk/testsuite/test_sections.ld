@@ -30,4 +30,11 @@ SECTIONS
 		. = ALIGN(16);
 		__stop_rodata_tests_platform = .;
 	} > rom :rodata
+
+	.tests_arch : {
+		__start_rodata_tests_arch = .;
+		KEEP(*(__tests_arch))
+		. = ALIGN(16);
+		__stop_rodata_tests_arch = .;
+	} > rom :rodata
 }
