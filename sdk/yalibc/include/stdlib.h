@@ -20,7 +20,7 @@ extern "C" {
 
 #define EXIT_FAILURE -1
 #define EXIT_SUCCESS 0
-#define RAND_MAX 0x40000000  /* 2^30, largest power of 2 in positive int range */
+#define RAND_MAX 0x7FFFFFFF  /* INT_MAX, rand() returns the 31 top bits of a 64bit xorshift */
 #define MB_CUR_MAX 1
 
 int rand(void);

@@ -793,6 +793,21 @@ enum hart_counters {
 			     : "memory");		\
 })
 
+/* Atomically write val and return the previous value. Also needed
+ * for CSRs that must be accessed with a read-write instruction, where
+ * a read-only access (csrr and friends) raises an illegal instruction
+ * exception, like seed (Zkr) - see rng.c. */
+#define csr_swap(addr, val)				\
+({							\
+	volatile unsigned long __ret;			\
+	unsigned long long __v = (unsigned long long)(val);	\
+	__asm__ __volatile__("csrrw %0, %1, %2"		\
+			     : "=r"(__ret)		\
+			     : "i"(addr), "rK"(__v)	\
+			     : "memory");		\
+	__ret;						\
+})
+
 #define csr_set_bits(addr, val)				\
 ({							\
 	unsigned long long __v = (unsigned long long)(val);	\

@@ -48,8 +48,13 @@ srand(unsigned int seed)
 int
 rand(void)
 {
-	/* Return positive int in range [0, RAND_MAX] */
-	return (int)(xorshift64_next() % RAND_MAX);;
+	/* Return a value in [0, RAND_MAX]. RAND_MAX is INT_MAX so this
+	 * comes down to returning 31 bits of the generator's output, and
+	 * the range is covered inclusively/uniformly (note the previous
+	 * "% RAND_MAX" approach could never return RAND_MAX itself). Use
+	 * the top bits, they are better distributed with xorshift
+	 * generators. */
+	return (int)(xorshift64_next() >> 33);
 }
 
 

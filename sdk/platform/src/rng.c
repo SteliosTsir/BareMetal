@@ -57,13 +57,35 @@ uint32_t rng_get_seed(void)
 		/* XOR in mtime if available */
 		seed ^= mtimer_get_num_ticks();
 	#endif
-	/* Try to get hardware entropy from CSR_SEED (Zkr extension) */
-	volatile uint32_t seed_val = 0;
-	seed_val = (uint32_t)csr_read(CSR_SEED);
-	uint32_t opstat = seed_val >> 30;
-	/* ES16 (10) = valid entropy */
-	if (opstat == 2)
-		seed ^= (uint64_t)(seed_val & 0xFFFF);
+	/* Try to get hardware entropy from CSR_SEED (Zkr extension).
+	 * Note: the spec requires seed to be accessed with a read-write
+	 * instruction (csr_swap), a read-only access raises an illegal
+	 * instruction exception. On harts without Zkr the access will
+	 * trap as well, in which case the trap handler will set
+	 * hs->error (see hart_exception_handler), and we'll mark the
+	 * source as dead so that we don't keep trapping on every call.
+	 * Same if the source reports a permanent failure (DEAD). The
+	 * BIST/WAIT states are transient, so we'll retry on the next
+	 * call, no need for a polling loop here since this is a
+	 * best-effort accumulator, not a TRNG interface. */
+	static bool seed_csr_dead = false;
+	if (!seed_csr_dead) {
+		struct hart_state *hs = hart_get_hstate_self();
+		hs->error = 0;
+		uint32_t seed_val = (uint32_t)csr_swap(CSR_SEED, 0);
+		if (hs->error != 0) {
+			hs->error = 0;
+			seed_csr_dead = true;
+		} else {
+			uint32_t opstat = seed_val >> 30;
+			/* ES16 (10) = valid entropy */
+			if (opstat == 2)
+				seed ^= (uint64_t)(seed_val & 0xFFFF);
+			/* DEAD (11) = permanent failure */
+			else if (opstat == 3)
+				seed_csr_dead = true;
+		}
+	}
 
 	/* Update global state with lock protection for multi-hart safety */
 	lock_acquire(&rng_lock);
