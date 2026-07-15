@@ -76,8 +76,11 @@ memset(void* restrict dst_ptr, int c, size_t len)
 	union data dst = { .as_bytes = dst_ptr };
 	unsigned char byte = (unsigned char) c;
 
-	/* Broadcast byte to all positions in word */
-	unsigned long bytes = (unsigned long) c * ONES;
+	/* Broadcast byte to all positions in word. Note: use the
+	 * converted byte, not c, so that values outside [0, 255]
+	 * (e.g. memset(ptr, -1, len)) produce the same pattern as
+	 * the per-byte loops below. */
+	unsigned long bytes = (unsigned long) byte * ONES;
 	size_t remaining = len;
 
 	/* Fill up dst up to the alignment boundary */
@@ -253,6 +256,12 @@ strrchr(const char *str_ptr, int c)
 size_t
 strnlen_s(const char *str_ptr, size_t maxlen)
 {
+	/* Annex K requires 0 for NULL, without this check we'd
+	 * return maxlen instead, since memchr(NULL, ...) returns
+	 * NULL as if the terminator wasn't found. */
+	if (!str_ptr)
+		return 0;
+
 	char *res = memchr(str_ptr, '\0', maxlen);
 	if (res != NULL)
 		return (size_t)(res - str_ptr);
@@ -690,7 +699,10 @@ memcmp(const void *s1, const void *s2, size_t len)
 		unsigned int high_shift = (WORD_SIZE - a_offt) * 8;
 		a.as_bytes -= a_offt;
 		a_next = *a.as_ulong;
-		for (; remaining >= WORD_SIZE; remaining -= WORD_SIZE, b.as_ulong++) {
+		/* As in copy_fw(): we always read one word ahead, so require
+		 * 2 * WORD_SIZE remaining to avoid over-reading past s1. Any
+		 * leftover bytes are handled by the per-byte loop below. */
+		for (; remaining >= (2 * WORD_SIZE); remaining -= WORD_SIZE, b.as_ulong++) {
 			a_cur = a_next;
 			a_next = *++a.as_ulong;
 			a_val = a_cur SHIFT_LOW low_shift | a_next SHIFT_HIGH high_shift;
@@ -766,9 +778,10 @@ strcmp(const char *s1, const char *s2)
 }
 
 /*
- * String search - optimized for small needles (up to WORD_SIZE chars)
- * Uses a sliding window approach, combining needle bytes into a word
- * and comparing against haystack words as we slide through.
+ * String search - optimized for small needles (the caller guarantees
+ * the needle is 2 up to WORD_SIZE chars). Uses a sliding window
+ * approach, combining needle bytes into a word and comparing against
+ * haystack words as we slide through.
  */
 static char*
 small_needle_search(const char *haystack, const char *needle)
@@ -790,13 +803,12 @@ small_needle_search(const char *haystack, const char *needle)
 		needle_len++;
 	}
 
-	/* If needle is longer than WORD_SIZE, bail out */
-	if (n[needle_len] != '\0')
-		return NULL;
-
-	/* Build mask to match needle length.
-	 * For needle_len=2 on 64-bit: mask = 0xFFFF */
-	mask = (1UL << (8 * needle_len)) - 1;
+	/* Build mask to match needle length, e.g. for needle_len=2 on
+	 * 64-bit: mask = 0xFFFF. Note: shift the all-ones pattern down
+	 * instead of doing (1UL << (8 * needle_len)) - 1, since the
+	 * latter is undefined behavior when needle_len == WORD_SIZE
+	 * (a shift by 64). */
+	mask = ~0UL >> ((WORD_SIZE - needle_len) * 8);
 
 	/* Pack initial haystack window */
 	for (size_t i = 0; i < needle_len; i++) {
@@ -819,15 +831,11 @@ small_needle_search(const char *haystack, const char *needle)
 		hw = (hw << 8) | *++h;
 	}
 
-	/* We've hit the null terminator. The needle might still match at
-	 * positions near the end. Keep shifting in zeros for (needle_len - 1)
-	 * more iterations to check all possible end-of-string matches. */
-	for (size_t i = 0; i < needle_len; i++) {
-		if ((hw & mask) == nw)
-			return (char *)(h - needle_len + 1 + i);
-		hw = (hw << 8);
-	}
-
+	/* We've hit the null terminator. No need to check any further:
+	 * the last window checked above was the one ending at the last
+	 * haystack character, which is also the last possible match. Any
+	 * window past it includes the terminator, and can never match a
+	 * needle (that by definition can't contain '\0'). */
 	return NULL;
 }
 
@@ -1067,10 +1075,12 @@ strstr(const char *haystack, const char *needle)
 	if (needle[1] == '\0')
 		return strchr((char *)haystack, needle[0]);
 
-	/* Try first for small needles that can fit in a word */
-	char* match_ptr = small_needle_search(haystack, needle);
-	if (match_ptr)
-		return match_ptr;
+	/* Use the sliding window approach for needles that fit in a word.
+	 * Dispatch on needle length here so that a miss from
+	 * small_needle_search() is final, instead of re-scanning the
+	 * haystack with the Two-Way algorithm. */
+	if (strnlen_s(needle, WORD_SIZE + 1) <= WORD_SIZE)
+		return small_needle_search(haystack, needle);
 
 	/* For larger needles, use Two-Way algorithm */
 	return twoway_strstr((const unsigned char *)haystack,

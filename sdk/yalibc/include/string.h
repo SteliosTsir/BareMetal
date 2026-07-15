@@ -49,7 +49,11 @@ void *memset_explicit(void *s, int c, size_t n);
 size_t strlen(const char *s);
 
 /* strnlen() exists on C23 but as part of Annex K, also include
- * it via POSIX which is the most common use case. */
+ * it via POSIX which is the most common use case.
+ *
+ * Note: strnlen is an alias of strnlen_s, so it follows Annex K
+ * and returns 0 for NULL pointers. POSIX leaves NULL undefined
+ * so this is a conforming extension. */
 
  /* C23 Annex K - Bounds-checking interfaces */
 #if defined(__STDC_WANT_LIB_EXT1__) && __STDC_WANT_LIB_EXT1__ == 1

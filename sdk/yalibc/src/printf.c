@@ -464,12 +464,11 @@ yalc_pf_char_out(char in, struct output_info* out)
 {
 	if (!out->outbuff) {
 		putchar(in);
-	} else if (out->outbuff_len > 0) {
-		if (out->chars_out < out->outbuff_len - 1)
-			out->outbuff[out->chars_out] = in;
-		/* Always null-terminate output */
-		else if (out->chars_out == out->outbuff_len - 1)
-			out->outbuff[out->chars_out] = '\0';
+	} else if (out->outbuff_len > 0 && out->chars_out < out->outbuff_len - 1) {
+		/* Drop any characters past outbuff_len - 1, reserving the
+		 * last byte of the buffer for the null terminator, added
+		 * once we are done in vsnprintf(). */
+		out->outbuff[out->chars_out] = in;
 	}
 	out->chars_out++;
 }
@@ -1210,7 +1209,7 @@ yalc_xprintf(struct output_info* restrict out, const char* restrict fmt, va_list
 		int ret = 0;
 		char cur_char = fmt[i];
 
-		/* Normal text (also handles the null terminator) */
+		/* Normal text */
 		if (cur_char != '%') {
 			yalc_pf_char_out(cur_char, out);
 			continue;
@@ -1405,7 +1404,19 @@ vsnprintf(char* restrict outbuff, size_t outbuff_len, const char* restrict fmt, 
 	struct output_info out = {0};
 	out.outbuff = outbuff;
 	out.outbuff_len = outbuff_len;
-	return yalc_xprintf(&out, fmt, &va);
+	int ret = yalc_xprintf(&out, fmt, &va);
+
+	/* Null-terminate the output buffer, both when the output was
+	 * truncated and when it's shorter than the buffer. Characters
+	 * past outbuff_len - 1 were dropped by yalc_pf_char_out() so
+	 * the terminator always fits. Nothing is written when
+	 * outbuff_len is 0, as required by the spec. */
+	if (outbuff && outbuff_len > 0) {
+		size_t term_idx = (out.chars_out < outbuff_len - 1) ?
+				   out.chars_out : outbuff_len - 1;
+		outbuff[term_idx] = '\0';
+	}
+	return ret;
 }
 
 int

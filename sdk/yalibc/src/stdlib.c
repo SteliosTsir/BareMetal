@@ -135,6 +135,12 @@ realloc(void *ptr, size_t size)
 		const uintptr_t start_ptr = (uintptr_t)ptr;
 		const uintptr_t end_ptr = start_ptr + aligned_size + (__SIZEOF_POINTER__);
 
+		/* Huge sizes may wrap the computations above and sneak past
+		 * the heap_end check below, ending up corrupting the heap,
+		 * reject them. */
+		if (aligned_size < size || end_ptr <= start_ptr)
+			goto done;
+
 		/* Check if we have enough space, and if so do the (re)allocation */
 		if (end_ptr > heap_end)
 			goto done;

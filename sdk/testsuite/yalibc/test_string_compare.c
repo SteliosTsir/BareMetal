@@ -112,6 +112,28 @@ test_string_compare(void)
 		failures++;
 	}
 
+	/* Unaligned s1 with the difference in the tail. The word-at-a-time
+	 * loop reads one word ahead of s1, so it must leave the trailing
+	 * 8-15 bytes to the per-byte loop instead of over-reading past s1,
+	 * while still catching differences there. With s2 at offset 2, the
+	 * alignment prefix is 6 bytes, s1 ends up mis-aligned by 7, and
+	 * with len 24 the last 10 bytes are handled by the per-byte loop. */
+	printf("memcmp: unaligned s1, difference in tail\n");
+	memset(testbuff_a, 0x33, 64);
+	memset(testbuff_b, 0x33, 64);
+	testbuff_a[1 + 23] = 0x44;	/* Last byte of the compared region */
+	ret = memcmp(testbuff_a + 1, testbuff_b + 2, 24);
+	if (ret <= 0) {
+		ERR("memcmp unaligned tail: got %d, expected positive\n", ret);
+		failures++;
+	}
+	testbuff_a[1 + 23] = 0x33;
+	ret = memcmp(testbuff_a + 1, testbuff_b + 2, 24);
+	if (ret != 0) {
+		ERR("memcmp unaligned tail (equal): got %d, expected 0\n", ret);
+		failures++;
+	}
+
 	/* Copy and verify equal */
 	printf("memcmp: after copy\n");
 	memcpy(testbuff_a, testbuff_b, 256);

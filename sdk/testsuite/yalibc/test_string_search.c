@@ -280,6 +280,12 @@ test_string_search(void)
 	}
 
 	/* Empty string */
+	printf("strnlen: NULL pointer\n");
+	if (strnlen(NULL, 10) != 0) {
+		ERR("strnlen(NULL, 10) != 0 (Annex K requires 0)\n");
+		failures++;
+	}
+
 	printf("strnlen: empty string\n");
 	if (strnlen("", 10) != 0) {
 		ERR("strnlen(\"\", 10) != 0\n");
@@ -604,6 +610,49 @@ test_string_search(void)
 	cptr = strstr("aaaaaab", "aaab");
 	if (!cptr || strcmp(cptr, "aaab") != 0) {
 		ERR("strstr partial match handling failed\n");
+		failures++;
+	}
+
+	/* Needles around the word-size boundary. A needle of exactly
+	 * WORD_SIZE (8) chars used to hit undefined behavior (a shift
+	 * by 64) when computing the window mask, ending up re-scanning
+	 * the haystack with the Two-Way algorithm. Also check matches
+	 * at the very end of the haystack, that's where the sliding
+	 * window search terminates. */
+	printf("strstr: needles around the word-size boundary\n");
+	cptr = strstr("scan for 8chrlong needles", "8chrlong");
+	if (!cptr || strcmp(cptr, "8chrlong needles") != 0) {
+		ERR("strstr 8-char needle search failed\n");
+		failures++;
+	}
+	cptr = strstr("scan for 8chrlong needles", "8chrl0ng");
+	if (cptr != NULL) {
+		ERR("strstr 8-char needle should not match\n");
+		failures++;
+	}
+	cptr = strstr("ends in 8chrlong", "8chrlong");
+	if (!cptr || strcmp(cptr, "8chrlong") != 0) {
+		ERR("strstr 8-char needle at end of haystack failed\n");
+		failures++;
+	}
+	cptr = strstr("ends in 7chrlng", "7chrlng");
+	if (!cptr || strcmp(cptr, "7chrlng") != 0) {
+		ERR("strstr 7-char needle at end of haystack failed\n");
+		failures++;
+	}
+	cptr = strstr("8chrlong", "8chrlong");
+	if (!cptr || strcmp(cptr, "8chrlong") != 0) {
+		ERR("strstr 8-char needle equals haystack failed\n");
+		failures++;
+	}
+	cptr = strstr("ends in 9charlong", "9charlong");
+	if (!cptr || strcmp(cptr, "9charlong") != 0) {
+		ERR("strstr 9-char needle at end of haystack failed\n");
+		failures++;
+	}
+	cptr = strstr("ends in 9charlong", "9charl0ng");
+	if (cptr != NULL) {
+		ERR("strstr 9-char needle should not match\n");
 		failures++;
 	}
 

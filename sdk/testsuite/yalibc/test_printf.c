@@ -11,6 +11,7 @@
 #include <stdio.h>			/* For printf */
 #include <platform/utils/utils.h>	/* For ANN/INF/ERR */
 #include <limits.h>			/* For INT_MAX */
+#include <string.h>			/* For memset/strcmp */
 #include <test_framework.h>		/* For test registration macros */
 
 static void
@@ -320,8 +321,51 @@ test_printf(void)
 	printf("|%13.15s|\n", &str[2]);
 	printf("|%13c|\n", str[5]);
 
+	INF("\n---SNPRINTF---\n");
+	int failures = 0;
+	char sbuff[16];
+	int sret = 0;
+
+	/* Output shorter than the buffer: must be null-terminated right
+	 * after the output (this used to leave the buffer unterminated). */
+	printf("snprintf: output shorter than buffer\n");
+	memset(sbuff, 0xAA, sizeof(sbuff));
+	sret = snprintf(sbuff, sizeof(sbuff), "abc");
+	if (sret != 3 || sbuff[3] != '\0' || strcmp(sbuff, "abc")) {
+		ERR("snprintf didn't null-terminate short output (ret: %i)\n", sret);
+		failures++;
+	}
+
+	/* Output exactly filling the buffer (outbuff_len - 1 characters) */
+	printf("snprintf: exact fit\n");
+	memset(sbuff, 0xAA, sizeof(sbuff));
+	sret = snprintf(sbuff, 4, "abc");
+	if (sret != 3 || sbuff[3] != '\0' || strcmp(sbuff, "abc")) {
+		ERR("snprintf didn't null-terminate exact-fit output (ret: %i)\n", sret);
+		failures++;
+	}
+
+	/* Truncated output: terminator at outbuff_len - 1, and the return
+	 * value reports the length that would have been written. */
+	printf("snprintf: truncation\n");
+	memset(sbuff, 0xAA, sizeof(sbuff));
+	sret = snprintf(sbuff, 4, "%s", "abcdef");
+	if (sret != 6 || sbuff[3] != '\0' || strcmp(sbuff, "abc")) {
+		ERR("snprintf truncation mis-terminated (ret: %i)\n", sret);
+		failures++;
+	}
+
+	/* Zero-sized buffer: nothing must be written */
+	printf("snprintf: zero-sized buffer\n");
+	memset(sbuff, 0xAA, sizeof(sbuff));
+	sret = snprintf(sbuff, 0, "abc");
+	if (sret != 3 || sbuff[0] != (char)0xAA) {
+		ERR("snprintf wrote to a zero-sized buffer (ret: %i)\n", sret);
+		failures++;
+	}
+
 	INF("Press a key to continue...\n");
-	return 0;
+	return failures;
 }
 
 REGISTER_YALIBC_TEST("Printf tests", test_printf);

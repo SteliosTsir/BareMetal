@@ -103,6 +103,24 @@ test_string_fill(void)
 		}
 	}
 
+	/* Fill values outside [0, 255] must be converted to unsigned char.
+	 * Check that the word-at-a-time path produces the same pattern as
+	 * the per-byte path (memset(ptr, -1, len) used to produce 0xFE
+	 * bytes on the word-aligned interior of the buffer). */
+	printf("memset: fill value conversion (-1, 0x1FF)\n");
+	int conversions[] = {-1, 0x1FF};
+	for (size_t p = 0; p < sizeof(conversions) / sizeof(conversions[0]); p++) {
+		memset(testbuff, conversions[p], 256);
+		for (int i = 0; i < 256; i++) {
+			if (testbuff[i] != 0xFF) {
+				ERR("memset conversion of %d failed at byte %d (0x%02x)\n",
+				    conversions[p], i, testbuff[i]);
+				failures++;
+				break;
+			}
+		}
+	}
+
 	/* Return value check */
 	printf("memset: return value\n");
 	void *ret = memset(testbuff, 0x77, 10);

@@ -425,6 +425,43 @@ test_allocator(void)
 		}
 	}
 
+	/* Test 10: Huge allocation sizes */
+	INF("Test 10: Huge allocation sizes...\n");
+	{
+		/* These used to wrap the internal end-of-allocation
+		 * computation and "succeed" with a bogus allocation. */
+		void *p1 = malloc(SIZE_MAX);
+		if (p1 != NULL) {
+			ERR("malloc(SIZE_MAX) should fail\n");
+			failures++;
+		}
+		p1 = malloc(SIZE_MAX - 7);
+		if (p1 != NULL) {
+			ERR("malloc(SIZE_MAX - 7) should fail\n");
+			failures++;
+		}
+
+		/* Same via resize of a valid allocation, also verify that
+		 * the allocation is intact after the failed realloc. */
+		uint8_t *p2 = malloc(64);
+		if (!p2) {
+			ERR("malloc(64) failed\n");
+			failures++;
+		} else {
+			FILL_PATTERN(p2, 64, 0xA5);
+			void *p3 = realloc(p2, SIZE_MAX - sizeof(uintptr_t));
+			if (p3 != NULL) {
+				ERR("huge realloc should fail\n");
+				failures++;
+			}
+			if (!CHECK_PATTERN(p2, 64, 0xA5)) {
+				ERR("failed huge realloc corrupted allocation\n");
+				failures++;
+			}
+			free(p2);
+		}
+	}
+
 	INF("=== Allocator Test Results: %s (%d failures) ===\n",
 		failures == 0 ? "PASS" : "FAIL", failures);
 
