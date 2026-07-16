@@ -149,8 +149,10 @@
 
 #if defined(PLAT_UART_BASE) && (PLAT_UART_BASE > 0)
 	#define _UART_DIVISOR ((PLAT_UART_CLOCK_HZ) / ((PLAT_UART_BAUD_RATE) << 4))
-	#if (_UART_DIVISOR > 255)
-		#error "UART divisor overflow: PLAT_UART_CLOCK_HZ / (PLAT_UART_BAUD_RATE * 16) must be <= 255"
+	#if (_UART_DIVISOR > 65535)
+		#error "UART divisor overflow: PLAT_UART_CLOCK_HZ / (PLAT_UART_BAUD_RATE * 16) must be <= 65535"
+	#elif (_UART_DIVISOR < 1)
+		#error "UART divisor is zero: PLAT_UART_CLOCK_HZ too low for PLAT_UART_BAUD_RATE"
 	#endif
 #endif
 

@@ -93,7 +93,7 @@ uart_read(int reg)
 void
 uart_init(void)
 {
-	uint8_t uart_divisor = (uint8_t) (PLAT_UART_CLOCK_HZ / (PLAT_UART_BAUD_RATE << 4));
+	uint16_t uart_divisor = (uint16_t) (PLAT_UART_CLOCK_HZ / (PLAT_UART_BAUD_RATE << 4));
 
 	/* Disable interrupts */
 	uart_write(UART_IER_OFFSET, 0);
@@ -101,9 +101,14 @@ uart_init(void)
 	/* Enable DLAB */
 	uart_write(UART_LCR_OFFSET, 0x80);
 
-	/* Set divisor low/high bytes*/
-	/* Example: 50MHz / (115200 << 4) = 27.1... -> 0x1b */
-	uart_write(UART_DLL_OFFSET, uart_divisor);
+	/* Set divisor low/high bytes
+	 * Example: 50MHz / (115200 << 4) = 27.1... -> 0x1b
+	 * Note: always set DLM as well, the divisor latches are not
+	 * affected by reset (their power-up content is indeterminate,
+	 * see e.g. the PC16550D datasheet), and a previous boot stage
+	 * may also have left a non-zero value there. */
+	uart_write(UART_DLL_OFFSET, uart_divisor & 0xFF);
+	uart_write(UART_DLM_OFFSET, uart_divisor >> 8);
 
 	/* Set Line Control Register:
 	 * 8 bits, no parity, one stop bit */
@@ -149,6 +154,7 @@ uart_putc(uint8_t c)
 {
 	uint8_t lsr = 0;
 
+ tx:
 	/* Wait for transmit register to be flushed */
 	do {
 		lsr = uart_read(UART_LSR_OFFSET);
@@ -156,9 +162,16 @@ uart_putc(uint8_t c)
 
 	/* Write byte to the Tx buffer */
 	uart_write(UART_THR_OFFSET, c);
-	/* If we got a new line, also print a carriage return */
-	if (c == '\n')
-		uart_write(UART_THR_OFFSET, '\r');
+
+	/* If we got a new line, also print a carriage return, going
+	 * through the THRE check above again. With FIFOs enabled the
+	 * second write would be covered anyway, but on FIFO-less parts
+	 * (16450, or a 16550 with a broken FIFO) back-to-back writes
+	 * may overwrite the holding register. */
+	if (c == '\n') {
+		c = '\r';
+		goto tx;
+	}
 
 	return;
 }
