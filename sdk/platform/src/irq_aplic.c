@@ -292,13 +292,20 @@ irq_init(void)
 		write32(TARGET(1), 0);
 		write32(SOURCECFG(1), FIELD_PREP(SOURCECFG_SM, SM_INACTIVE));
 
-		/* Direct delivery mode: Initialize all IDC contexts */
+		/* Direct delivery mode: Initialize all IDC contexts. Interrupt
+		 * delivery is gated through idelivery (and the per-source
+		 * enable bits), so set ithreshold to 0, which means "no
+		 * priority masking". Note that a non-zero threshold value P
+		 * masks priority numbers P and higher (see the ithreshold
+		 * section of the AIA spec), so e.g. a threshold of
+		 * aplic_min_priority would permanently mask IRQ_PRIORITY_LOW
+		 * sources (that map to that priority number). */
 		DBG("Initializing %d IDC contexts...\n", PLAT_MAX_HARTS);
 		for (int i = 0; i < PLAT_MAX_HARTS; i++) {
 			uint16_t idc = platform_intc_map[i].target.idc_idx;
-			DBG("  IDC %d: delivery=0, threshold=%d\n", idc, aplic_min_priority);
+			DBG("  IDC %d: delivery=0, threshold=0\n", idc);
 			write32(IDC_IDELIVERY(idc), 0);
-			write32(IDC_ITHRESHOLD(idc), aplic_min_priority);
+			write32(IDC_ITHRESHOLD(idc), 0);
 		}
 
 		/* Enable the domain in direct delivery mode
@@ -440,6 +447,13 @@ irq_dispatch(uint16_t eiid)
 	#else
 		uint16_t source_id = eiid;
 	#endif
+
+	/* Reading claimi (or mtopei on MSI mode) returns 0 when there is
+	 * no interrupt pending, don't treat it as a source id. */
+	if (source_id == 0) {
+		WRN("Got spurious interrupt from APLIC !\n");
+		return;
+	}
 
 	DBG("Claimed interrupt source: %i\n", source_id);
 

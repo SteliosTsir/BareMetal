@@ -38,6 +38,9 @@
 /* Use a high-numbered source as our test/detached source to avoid conflicts */
 #define TEST_SOURCE_ID		(PLAT_NUM_IRQ_SOURCES - 1)
 
+/* Same but for the low-priority delivery test below */
+#define TEST_SOURCE_LOW_ID	(PLAT_NUM_IRQ_SOURCES - 2)
+
 /* Track whether interrupt was delivered */
 static volatile uint8_t interrupt_received = 0;
 static volatile uint16_t received_source = 0;
@@ -57,6 +60,14 @@ REGISTER_IRQ_SOURCE(aplic_test, {
 	.handler = aplic_test_handler,
 	.target_hart = 0,
 	.priority = IRQ_PRIORITY_HIGH,
+	.flags = IRQ_TRIGGER_DETACHED,
+});
+
+REGISTER_IRQ_SOURCE(aplic_test_low, {
+	.source.wire_id = TEST_SOURCE_LOW_ID,
+	.handler = aplic_test_handler,
+	.target_hart = 0,
+	.priority = IRQ_PRIORITY_LOW,
 	.flags = IRQ_TRIGGER_DETACHED,
 });
 
@@ -294,5 +305,56 @@ test_aplic_delivery(void)
 }
 
 REGISTER_PLATFORM_TEST("APLIC interrupt delivery test", test_aplic_delivery);
+
+/* Same as the delivery test above but with a source registered with
+ * IRQ_PRIORITY_LOW. In direct mode such sources used to be masked
+ * forever: ithreshold was left at the minimum priority, and a non-zero
+ * threshold P masks priority numbers P and higher - which is exactly
+ * where IRQ_PRIORITY_LOW maps. In MSI mode priorities don't apply
+ * (EIIDs are used instead), the test should pass either way. */
+static int
+test_aplic_delivery_low(void)
+{
+	ANN("\n---=== APLIC Low-priority Delivery Test ===---\n");
+
+	INF("Testing delivery of an IRQ_PRIORITY_LOW source (%u)\n", TEST_SOURCE_LOW_ID);
+
+	uint32_t domaincfg = read32(APLIC_DOMAINCFG);
+	uint8_t is_msi_mode = !!(domaincfg & (1<<2));
+
+	interrupt_received = 0;
+	received_source = 0;
+
+	hart_enable_intr(INTR_MACHINE_EXTERNAL);
+	irq_source_enable(TEST_SOURCE_LOW_ID);
+
+	INF("Triggering source %u via SETIPNUM_LE\n", TEST_SOURCE_LOW_ID);
+	write32(APLIC_SETIPNUM_LE, TEST_SOURCE_LOW_ID);
+
+	/* Wait for interrupt delivery using wfi */
+	for (int i = 0; i < 10 && !interrupt_received; i++) {
+		wfi();
+		/* In MSI mode, trigger GENMSI to ensure MSI write completes */
+		if (is_msi_mode && !interrupt_received)
+			write32(APLIC_GENMSI, 0);
+	}
+
+	/* Cleanup */
+	irq_source_disable(TEST_SOURCE_LOW_ID);
+	hart_disable_intr(INTR_MACHINE_EXTERNAL);
+
+	if (!interrupt_received || received_source != TEST_SOURCE_LOW_ID) {
+		ERR("Low-priority interrupt was NOT delivered (received: %u, source: %u)\n",
+		    interrupt_received, received_source);
+		INF("\nPress a key to continue...\n");
+		return -1;
+	}
+
+	INF("Low-priority interrupt delivered (source %u)\n", received_source);
+	INF("\nPress a key to continue...\n");
+	return 0;
+}
+
+REGISTER_PLATFORM_TEST("APLIC low-priority delivery test", test_aplic_delivery_low);
 
 #endif /* defined(PLAT_HAS_APLIC) */

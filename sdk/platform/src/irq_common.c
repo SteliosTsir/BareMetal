@@ -45,6 +45,12 @@ irq_get_srcmap(uint16_t source_id)
 int
 irq_get_target_idx_for_hart(uint16_t target_hart)
 {
+	/* Make sure target_hart is a registered hart, otherwise we'd
+	 * read uninitialized memory instead of its hart_state below
+	 * (and possibly index platform_intc_map out of bounds). */
+	if (target_hart >= hart_get_count())
+		return -1;
+
 	struct hart_state* hs = hart_get_hstate_by_idx(target_hart);
 	if (hs->irq_map_idx < 0)
 		return -1;
