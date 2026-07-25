@@ -57,7 +57,11 @@ platform_init_default(void)
 		for (int i = 0; i < current_count; i++) {
 			struct hart_state *hs = hart_get_hstate_by_idx(i);
 			if (hs->hart_idx != i) {
-				hart_set_count(i + 1);
+				/* Hart at index i never finished initializing its
+				 * hart_state, so only harts 0..i-1 are valid, that's
+				 * a count of i (not i + 1, which would keep the
+				 * broken hart in the set). */
+				hart_set_count(i);
 				current_count = hart_get_count();
 				WRN("Hart initialization for idx: %i incomplete, truncated counter to: %i\n",
 				    i, current_count);

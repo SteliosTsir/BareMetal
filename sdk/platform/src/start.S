@@ -174,6 +174,15 @@ FUNC_START _start
 			bne	t2, t4, .Lwait_for_counter
 
 		.Lcounter_ready:
+			/* Acquire: we've observed "ready", make sure the counter
+			 * access below isn't reordered before that observation,
+			 * so we are guaranteed to see the initialized counter.
+			 * This is the matching half of the boot hart's release
+			 * fence above. Note this is reached both by falling
+			 * through from .Lwait_for_counter and directly from the
+			 * lottery path (when status was already "ready"), so the
+			 * fence has to live here to cover both. */
+			fence	r, rw
 			/* Counter is ready, atomically get our index */
 			li	t0, 1
 			amoadd.w t3, t0, (HART_COUNTER_ADDR)
@@ -192,8 +201,14 @@ FUNC_START _start
 			/* Boot hart always gets index 0 for the first stack slot */
 			mv	HART_IDX, zero
 			sw	zero, (HART_COUNTER_ADDR)	/* Init counter */
+			/* Release: the counter must be initialized (and visible
+			 * to others) before we publish the "ready" status,
+			 * otherwise a secondary hart could observe "ready" and
+			 * amoadd onto a still-uninitialized counter. The fence
+			 * has to sit between the two stores, a fence after both
+			 * wouldn't order them relative to each other. */
+			fence	w, w
 			sw	t2, (HART_COUNTER_STATUS_ADDR)	/* Signal ready */
-			fence	w, w	/* Make both visible */
 	#else
 		/* Single hart system - no atomics needed, just set index and
 		 * last hart index (count) to 0 */
