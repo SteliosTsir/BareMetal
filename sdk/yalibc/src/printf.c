@@ -177,10 +177,17 @@ yalc_pf_parse_format(const char* restrict fmt, int fmt_len, struct format_info* 
 			continue;
 		case '0':
 			/* Zero can also be part of the width/precision
-			 * field but only if it's not its first digit. */
+			 * field but only if it's not its first digit. Guard the
+			 * *10 against overflow just like the '1'..'9' path below,
+			 * otherwise a run of trailing zeros (e.g. "%20000000000d")
+			 * overflows the int. */
 			if ((fi->flags & SFLAG_HAS_PREC) && !prec_from_arg) {
+				if (fi->precision > (INT_MAX / 10))
+					return -EINVAL;
 				fi->precision *= 10;
 			} else if ((fi->flags & SFLAG_HAS_WIDTH) && !width_from_arg) {
+				if (fi->width > (INT_MAX / 10))
+					return -EINVAL;
 				fi->width *= 10;
 			} else if (!(fi->flags & FFLAG_ZERO_PAD))
 				fi->flags |= FFLAG_ZERO_PAD;
