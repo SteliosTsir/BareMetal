@@ -20,6 +20,191 @@
 
 #include <errno.h>			/* For errno and error constants */
 
+/*********\
+* HELPERS *
+\*********/
+
+static void
+hart_on_wakeup(struct hart_state *hs)
+{
+	/* Note: no side effects (e.g. hart_clear_ipi_mask()) inside DBG(),
+	 * its arguments are not evaluated on non-DEBUG builds. The IPI
+	 * mask is consumed by hart_on_mswtrig() anyway (or is already cleared
+	 * if we ended up here via hart_init). */
+	DBG("HART %i UP: hart_id (from mhartid): %li, ipi_mask 0x%x, flags: 0x%x, irq_map_idx: %i, error: %i, mstatus: %lx, mtvec: %lx\n",
+	    hs->hart_idx,
+	    hs->hart_id,
+	    hart_get_ipi_mask(hs),
+	    hart_get_flags(hs),
+	    hs->irq_map_idx,
+	    hs->error,
+	    csr_read(CSR_MSTATUS),
+	    csr_read(CSR_MTVEC));
+
+	hs->error = 0;
+
+	/* Trigger a re-seeding of rng state so that
+	 * the timing/order of hart registration influences
+	 * rng state (hoping to gather some entropy bits out
+	 * of this). */
+	(void)rng_get_seed();
+}
+
+/*--== IPI argument passing ==--*/
+
+/*
+ * This whole cluster is IPI-only, so it's compiled out on PLAT_NO_IPI builds
+ * (a no-op hart_release_ipi_params() is provided below so the always-present
+ * dispatch code still links). Together with the guarded senders further down,
+ * that keeps the buffer, the wait helper and the senders out of single-core /
+ * no-IPI images entirely.
+ */
+#ifndef PLAT_NO_IPI
+
+/*
+ * Shared parameters buffer for IPIs that carry arguments (wakeup with
+ * address / EIID configuration). Senders are serialized via wakeup_lock,
+ * and params_pending counts the target harts that haven't copied the
+ * buffer's contents over yet. Senders wait for params_pending to drop
+ * back to zero before reusing the buffer, and targets decrement it once
+ * they are done with it. This way nobody waits for its own request to
+ * complete, the cost of polling is deferred to the next args-carrying
+ * IPI instead (that will only spin if it comes in before the previous
+ * one was handled). Note that applications may still point a hart's
+ * next_params to their own buffer and manage its lifetime themselves,
+ * we only track our own buffer here.
+ */
+static atomic_int wakeup_lock = 0;
+static atomic_int params_pending = 0;
+static struct next_params ipi_params = {0};
+
+/* Wait until the shared params buffer is free to (re)use, in case the
+ * target(s) of a previous args-carrying IPI haven't consumed it yet.
+ * Normally this doesn't spin at all. The wait is bounded so that a
+ * target that can't handle its IPI (e.g. it's running with interrupts
+ * disabled) won't block us forever, if we hit that we complain and
+ * reclaim the buffer (best effort, the system is misbehaving already). */
+static void
+hart_wait_params_free(void)
+{
+	uint32_t spins = 10000000;
+	while (atomic_load_explicit(&params_pending, memory_order_acquire) && --spins)
+		pause();
+	if (!spins) {
+		ERR("Args from previous IPI not consumed (pending: %i), reclaiming\n",
+		    atomic_load_explicit(&params_pending, memory_order_relaxed));
+		atomic_store_explicit(&params_pending, 0, memory_order_relaxed);
+	}
+}
+
+/* A target consuming an args-carrying IPI signals it's done with the shared
+ * buffer by decrementing params_pending (see hart_wait_params_free). Only our
+ * own buffer is tracked; application-owned buffers are left to the app. */
+static void
+hart_release_ipi_params(struct next_params *params)
+{
+	if (params == &ipi_params)
+		atomic_fetch_sub_explicit(&params_pending, 1, memory_order_release);
+}
+
+#else	/* PLAT_NO_IPI */
+
+/* Without IPIs nothing ever sets hs->next_params, so hart_jump_with_args()
+ * never calls this with a real buffer; the no-op just lets the dispatch code
+ * link without pulling in the IPI param bookkeeping above. */
+static void hart_release_ipi_params(struct next_params *params) { (void)params; }
+
+#endif	/* PLAT_NO_IPI */
+
+/*--== Hart dispatch ==--*/
+
+/* noinline is required: hart_dispatch() moves sp with inline asm that the
+ * compiler can't see, so this must NOT be inlined into it - otherwise its
+ * spill slots would be addressed off the (now redirected) sp and land inside
+ * the hart_state at the top of the stack. */
+static void __attribute__((noreturn, noinline))
+hart_jump_with_args(void)
+{
+	struct hart_state *hs = hart_get_hstate_self();
+	uintptr_t next_addr = hs->next_addr;
+	uint64_t arg0 = csr_read(CSR_MHARTID);
+	uint64_t arg1 = 0;
+	uint64_t mtimer_cycles = 0;
+
+	if (next_addr == 0) {
+		ERR("Nowhere to jump to...\n");
+		hart_hang();
+	}
+
+	/* Copy the arguments over and mark them as consumed right away,
+	 * so that the shared params buffer can be reused while we wait
+	 * for the rendezvous point below (otherwise a timed wakeup would
+	 * keep the buffer busy -and the next sender spinning- for the
+	 * whole sleep). Only track our shared buffer, applications may
+	 * point us to their own. */
+	struct next_params *params = hs->next_params;
+	if (params != NULL) {
+		arg0 = params->arg0;
+		arg1 = params->arg1;
+		mtimer_cycles = params->mtimer_cycles;
+		hs->next_params = NULL;
+		hart_release_ipi_params(params);
+	}
+
+	DBG("Will jump to 0x%lx", next_addr);
+	if (params != NULL)
+		DBG(" with arg0:0x%lx, arg1:0x%lx", arg0, arg1);
+	#ifndef PLAT_NO_MTIMER
+	if (mtimer_cycles) {
+		DBG(" at %li", mtimer_cycles);
+		hart_set_flags(hs, HS_FLAG_SLEEPING);
+		mtimer_arm_at(mtimer_cycles);
+		mtimer_enable_irq();
+		while (hart_test_flags(hs, HS_FLAG_SLEEPING)) {
+			wfi();
+		}
+		mtimer_disable_irq();
+	}
+	#else
+		(void)mtimer_cycles;
+	#endif
+	DBG("\n");
+
+	hart_set_flags(hs, HS_FLAG_RUNNING);
+
+	/* Ensure all pending memory operations complete */
+	__asm__ __volatile__("fence.i");
+	__asm__ __volatile__("fence");
+
+	/* Jump to payload with arguments. entry() may return (e.g. a program
+	 * or thread that finishes), so it's deliberately NOT marked noreturn.
+	 * We can be reached by a direct call (boot hart, from hart_init) or via
+	 * mret from the IPI handler (secondaries, with no valid return address),
+	 * so we must not rely on returning to our caller. */
+	void (*entry)(uint64_t, uint64_t) = (void *)next_addr;
+	entry(arg0, arg1);
+
+	/* Payload returned: drop RUNNING (back to READY) and park until the next
+	 * IPI_WAKEUP_WITH_ADDR re-dispatches us. This function never returns. */
+	hart_clear_flags(hs, HS_FLAG_RUNNING);
+	while (1 == 1)
+		wfi();
+}
+
+/*
+ * (Re-)dispatch entry point. We reach hart_jump_with_args() from the top on
+ * every wakeup (direct call from hart_init, or mret from the IPI handler)
+ * without unwinding the previous invocation, so reset sp to this hart's base
+ * first (mscratch, set by start.S, sits right at the hart_state) - otherwise
+ * each re-dispatch would waste a stack frame. The call below never returns.
+ */
+static void __attribute__((noreturn))
+hart_dispatch(void)
+{
+	__asm__ __volatile__("csrr sp, mscratch" ::: "memory");
+	hart_jump_with_args();
+}
+
 /***************\
 * TRAP HANDLING *
 \***************/
@@ -64,109 +249,17 @@ hart_default_trap_handler(void)
 void __empty_trap_handler hart_handle_supervisor_swtrig(void);
 void __empty_trap_handler hart_handle_guest_swtrig(void);
 
-#ifndef PLAT_NO_IPI
-
-/*
- * Shared parameters buffer for IPIs that carry arguments (wakeup with
- * address / EIID configuration). Senders are serialized via wakeup_lock,
- * and params_pending counts the target harts that haven't copied the
- * buffer's contents over yet. Senders wait for params_pending to drop
- * back to zero before reusing the buffer, and targets decrement it once
- * they are done with it. This way nobody waits for its own request to
- * complete, the cost of polling is deferred to the next args-carrying
- * IPI instead (that will only spin if it comes in before the previous
- * one was handled). Note that applications may still point a hart's
- * next_params to their own buffer and manage its lifetime themselves,
- * we only track our own buffer here.
- */
-static atomic_int wakeup_lock = 0;
-static atomic_int params_pending = 0;
-static struct next_params ipi_params = {0};
-
-/* Wait until the shared params buffer is free to (re)use, in case the
- * target(s) of a previous args-carrying IPI haven't consumed it yet.
- * Normally this doesn't spin at all. The wait is bounded so that a
- * target that can't handle its IPI (e.g. it's running with interrupts
- * disabled) won't block us forever, if we hit that we complain and
- * reclaim the buffer (best effort, the system is misbehaving already). */
-static void
-hart_wait_params_free(void)
-{
-	uint32_t spins = 10000000;
-	while (atomic_load_explicit(&params_pending, memory_order_acquire) && --spins)
-		pause();
-	if (!spins) {
-		ERR("Args from previous IPI not consumed (pending: %i), reclaiming\n",
-		    atomic_load_explicit(&params_pending, memory_order_relaxed));
-		atomic_store_explicit(&params_pending, 0, memory_order_relaxed);
-	}
-}
-
-static void __attribute__((noreturn))
-hart_jump_with_args(void)
-{
-	struct hart_state *hs = hart_get_hstate_self();
-	uintptr_t next_addr = hs->next_addr;
-	uint64_t arg0 = csr_read(CSR_MHARTID);
-	uint64_t arg1 = 0;
-	uint64_t mtimer_cycles = 0;
-
-	if (next_addr == 0) {
-		ERR("Nowhere to jump to...\n");
-		hart_hang();
-	}
-
-	/* Copy the arguments over and mark them as consumed right away,
-	 * so that the shared params buffer can be reused while we wait
-	 * for the rendezvous point below (otherwise a timed wakeup would
-	 * keep the buffer busy -and the next sender spinning- for the
-	 * whole sleep). Only track our shared buffer, applications may
-	 * point us to their own. */
-	struct next_params *params = hs->next_params;
-	if (params != NULL) {
-		arg0 = params->arg0;
-		arg1 = params->arg1;
-		mtimer_cycles = params->mtimer_cycles;
-		hs->next_params = NULL;
-		if (params == &ipi_params)
-			atomic_fetch_sub_explicit(&params_pending, 1,
-						  memory_order_release);
-	}
-
-	DBG("Will jump to 0x%lx", next_addr);
-	if (params != NULL)
-		DBG(" with arg0:0x%lx, arg1:0x%lx", arg0, arg1);
-	#ifndef PLAT_NO_MTIMER
-	if (mtimer_cycles) {
-		DBG(" at %li", mtimer_cycles);
-		hart_set_flags(hs, HS_FLAG_SLEEPING);
-		mtimer_arm_at(mtimer_cycles);
-		mtimer_enable_irq();
-		while (hart_test_flags(hs, HS_FLAG_SLEEPING)) {
-			wfi();
-		}
-		mtimer_disable_irq();
-	}
-	#else
-		(void)mtimer_cycles;
-	#endif
-	DBG("\n");
-
-	/* Ensure all pending memory operations complete */
-	__asm__ __volatile__("fence.i");
-	__asm__ __volatile__("fence");
-
-	/* Jump to payload with arguments */
-	void (*__attribute__((noreturn)) entry)(uint64_t, uint64_t) = (void *)next_addr;
-	entry(arg0, arg1);
-}
-
 #if defined(PLAT_HAS_IMSIC) && (!defined(PLAT_BYPASS_IMSIC) || (PLAT_IMSIC_IPI_EIID > 0))
 static void
 hart_set_imsic_eiid_status(struct hart_state *hs, uint16_t eiid, bool enable)
 {
-		DBG("%s eeid %hu on hart_idx: %i\n", enable ? "Enabling" : "Disabling",
-		    eiid, hs->hart_idx);
+		/* Gate the trace on HS_FLAG_RUNNING: this is also called from
+		 * hart_init_intr() on the self-init path (hart not RUNNING yet,
+		 * console may still be down) where we must stay silent; at
+		 * runtime (IPI ENABLE/DISABLE_EIID, hart RUNNING) it prints. */
+		if (hart_test_flags(hs, HS_FLAG_RUNNING))
+			DBG("%s eeid %hu on hart_idx: %i\n",
+			    enable ? "Enabling" : "Disabling", eiid, hs->hart_idx);
 		/* Enable/disable this interrupt identity in IMSIC (via indirect CSRs)
 		 * EIE registers start at iselect 0xC0, each register covers 32
 		 * identities, but on 64bit we read two registers together so
@@ -198,9 +291,10 @@ hart_on_mswtrig(struct hart_state *hs)
 	uint16_t ipi_mask = hart_clear_ipi_mask(hs);
 	DBG("Got IPI on hart %i, id: %li, mask: 0x%x\n", hs->hart_idx, hs->hart_id, ipi_mask);
 	if (ipi_mask & IPI_WAKEUP_WITH_ADDR) {
+		hart_on_wakeup(hs);
 		/* Set MEPC to our trampoline function */
-		csr_write(CSR_MEPC, (uintptr_t)hart_jump_with_args);
-	}
+		csr_write(CSR_MEPC, (uintptr_t)hart_dispatch);
+	} else
 	#if defined(PLAT_HAS_IMSIC) && !defined(PLAT_BYPASS_IMSIC)
 		if (ipi_mask & (IPI_ENABLE_EIID|IPI_DISABLE_EIID)) {
 			struct next_params *params = hs->next_params;
@@ -209,19 +303,22 @@ hart_on_mswtrig(struct hart_state *hs)
 				bool enable = (bool) params->arg1;
 				/* Mark args as consumed (see hart_jump_with_args) */
 				hs->next_params = NULL;
-				if (params == &ipi_params)
-					atomic_fetch_sub_explicit(&params_pending, 1,
-								  memory_order_release);
+				hart_release_ipi_params(params);
 				hart_set_imsic_eiid_status(hs, eiid, enable);
 			} else
 				ERR("Got EIID IPI without params !\n");
-		}
+		} else
 	#endif
+	if (ipi_mask & IPI_WAKEUP)
+		hart_on_wakeup(hs);
 	return;
 }
 
-#if (PLAT_IMSIC_IPI_EIID > 0)
-	/* IPIs will be handled by the external interrupt handler */
+#if (PLAT_IMSIC_IPI_EIID > 0) || defined(PLAT_NO_IPI)
+	/* IPIs arrive via the external interrupt handler (IMSIC), or not at all
+	 * (PLAT_NO_IPI) - either way there's no MSWI to service here. With this
+	 * empty handler installed nothing references hart_on_mswtrig(), so it and
+	 * the sender-only machinery get dropped at link time (--gc-sections). */
 	void __empty_trap_handler hart_handle_machine_swtrig(void);
 #else
 void __trap_handler
@@ -231,9 +328,6 @@ hart_handle_machine_swtrig(void)
 	hart_on_mswtrig(hs);
 	return;
 }
-#endif
-#else	/* PLAT_NO_IPI */
-	void __empty_trap_handler hart_handle_machine_swtrig(void);
 #endif
 
 /* Timer interrupt */
@@ -583,110 +677,112 @@ hart_configure_imsic_eiid(uint16_t hart_idx, uint16_t eiid, bool enable)
 	#endif
 }
 
+#ifndef PLAT_NO_IPI
+
 void
 hart_wakeup_with_addr(uint16_t hart_idx, uintptr_t jump_addr, uint64_t arg0,
 		      uint64_t arg1, uint64_t mtimer_cycles)
 {
-	#ifndef PLAT_NO_IPI
-		if (hart_idx >= hart_get_count()) {
-			ERR("Tried to wake up unregistered hart_idx: %i\n", hart_idx);
-			return;
-		}
+	if (hart_idx >= hart_get_count()) {
+		ERR("Tried to wake up unregistered hart_idx: %i\n", hart_idx);
+		return;
+	}
 
-		struct hart_state *hs = hart_get_hstate_by_idx(hart_idx);
+	struct hart_state *hs = hart_get_hstate_by_idx(hart_idx);
 
-		lock_acquire(&wakeup_lock);
-		hart_wait_params_free();
-		ipi_params.arg0 = arg0;
-		ipi_params.arg1 = arg1;
-		ipi_params.mtimer_cycles = mtimer_cycles;
-		hs->next_addr = jump_addr;
-		hs->next_params = &ipi_params;
-		atomic_fetch_add_explicit(&params_pending, 1, memory_order_relaxed);
-		ipi_send(hs, IPI_WAKEUP_WITH_ADDR);
-		lock_release(&wakeup_lock);
-	#else
-		ERR("IPIs are not supported on this platform !\n");
-	#endif
+	lock_acquire(&wakeup_lock);
+	hart_wait_params_free();
+	ipi_params.arg0 = arg0;
+	ipi_params.arg1 = arg1;
+	ipi_params.mtimer_cycles = mtimer_cycles;
+	hs->next_addr = jump_addr;
+	hs->next_params = &ipi_params;
+	atomic_fetch_add_explicit(&params_pending, 1, memory_order_relaxed);
+	ipi_send(hs, IPI_WAKEUP_WITH_ADDR);
+	lock_release(&wakeup_lock);
 }
 
 void
 hart_wakeup_all_with_addr(uintptr_t jump_addr, uint64_t arg0, uint64_t arg1,
 			  uint64_t mtimer_cycles)
 {
-	#ifndef PLAT_NO_IPI
-		int num_harts = hart_get_count();
-		struct hart_state *this_hs = hart_get_hstate_self();
+	int num_harts = hart_get_count();
+	struct hart_state *this_hs = hart_get_hstate_self();
 
-		lock_acquire(&wakeup_lock);
-		hart_wait_params_free();
-		ipi_params.arg0 = arg0;
-		ipi_params.arg1 = arg1;
-		ipi_params.mtimer_cycles = mtimer_cycles;
+	lock_acquire(&wakeup_lock);
+	hart_wait_params_free();
+	ipi_params.arg0 = arg0;
+	ipi_params.arg1 = arg1;
+	ipi_params.mtimer_cycles = mtimer_cycles;
 
-		/* All targets share the same arguments (that's the point of
-		 * this function), mark them all as pending upfront so that
-		 * the buffer stays busy until the last one has copied them. */
-		atomic_fetch_add_explicit(&params_pending, num_harts,
-					  memory_order_relaxed);
+	/* All targets share the same arguments (that's the point of
+	 * this function), mark them all as pending upfront so that
+	 * the buffer stays busy until the last one has copied them. */
+	atomic_fetch_add_explicit(&params_pending, num_harts,
+				  memory_order_relaxed);
 
-		/* First send IPI to all other harts */
-		for (int i = 0; i < num_harts; i++) {
-			struct hart_state *hs = hart_get_hstate_by_idx(i);
-			if (hs == this_hs)
-				continue;
-			hs->next_addr = jump_addr;
-			hs->next_params = &ipi_params;
-			ipi_send(hs, IPI_WAKEUP_WITH_ADDR);
-		}
+	/* First send IPI to all other harts */
+	for (int i = 0; i < num_harts; i++) {
+		struct hart_state *hs = hart_get_hstate_by_idx(i);
+		if (hs == this_hs)
+			continue;
+		hs->next_addr = jump_addr;
+		hs->next_params = &ipi_params;
+		ipi_send(hs, IPI_WAKEUP_WITH_ADDR);
+	}
 
-		/* Finaly to self. Note that we release the lock first: once
-		 * the IPI comes in we'll jump away and never return here,
-		 * whoever needs the buffer next will wait on params_pending
-		 * instead. */
-		this_hs->next_addr = jump_addr;
-		this_hs->next_params = &ipi_params;
-		lock_release(&wakeup_lock);
-		ipi_self(IPI_WAKEUP_WITH_ADDR);
-	#else
-		ERR("IPIs are not supported on this platform !\n");
-	#endif
+	/* Finaly to self. Note that we release the lock first: once
+	 * the IPI comes in we'll jump away and never return here,
+	 * whoever needs the buffer next will wait on params_pending
+	 * instead. */
+	this_hs->next_addr = jump_addr;
+	this_hs->next_params = &ipi_params;
+	lock_release(&wakeup_lock);
+	ipi_self(IPI_WAKEUP_WITH_ADDR);
 }
 
-/* Main without arguments as per C spec */
-int main(void);
+#else	/* PLAT_NO_IPI: no harts to wake, keep the API as no-ops */
 
-extern void platform_init(void);
-
-void __attribute__((noreturn))
-hart_init(void)
+void
+hart_wakeup_with_addr(uint16_t hart_idx, uintptr_t jump_addr, uint64_t arg0,
+		      uint64_t arg1, uint64_t mtimer_cycles)
 {
-	struct hart_state *hs = hart_get_hstate_self();
-	#if (PLAT_HART_VECTORED_TRAPS == 1)
-		/* Reference the vector table symbol - only visible in this function */
-		extern char hart_trap_vector_table[];
-		uintptr_t mtvec_val = (uintptr_t)hart_trap_vector_table | 1;
-	#else
-		uintptr_t mtvec_val = (uintptr_t)hart_direct_trap_handler & ~1;
-	#endif
-	csr_write(CSR_MTVEC, mtvec_val);
+	(void)hart_idx; (void)jump_addr; (void)arg0; (void)arg1; (void)mtimer_cycles;
+}
 
-	if (hs->hart_idx == 0)
-		platform_init();
+void
+hart_wakeup_all_with_addr(uintptr_t jump_addr, uint64_t arg0, uint64_t arg1,
+			  uint64_t mtimer_cycles)
+{
+	(void)jump_addr; (void)arg0; (void)arg1; (void)mtimer_cycles;
+}
 
-	uint64_t misa = csr_read(CSR_MISA);
-	hart_init_fpu(hs, misa);
-	hart_init_vpu(hs, misa);
-	hart_init_counters(hs);
-	hart_init_sdtrig(hs);
+#endif	/* PLAT_NO_IPI */
 
+/***********\
+* HART INIT *
+\***********/
+
+/*
+ * Everything here runs on the per-hart self-init path. Secondary harts
+ * (hart_idx > 0) reach it straight out of start.S while the boot hart may
+ * still be bringing up the shared environment, so .data/.bss and the console
+ * (UART, set up by platform_init()) are not guaranteed to be ready yet.
+ * Code here must therefore stick to hart-local state (stack + CSRs + .rodata)
+ * and must not print or take shared locks. Anything worth reporting is stashed
+ * in hs->error and printed later by hart_on_wakeup(), once the hart is
+ * dispatched and the console is up.
+ */
+static void
+hart_init_intr(struct hart_state *hs)
+{
 	#if defined(PLAT_HAS_IMSIC) && defined(PLAT_BYPASS_IMSIC)
 		/* Make sure EIDELIVERY @0x70 is set to 0x40000000 on reset
 		 * to bypass IMSIC, otherwise IMSIC bypass is not supported ! */
 		csr_write(CSR_MISELECT, 0x70);
 		uint64_t eidelivery = csr_read(CSR_MIREG);
 		if (eidelivery != 0x40000000)
-			ERR("IMSIC bypass is not supported (eidelivery: 0x%lx) !\n", eidelivery);
+			hs->error = ENOTSUP;
 	#endif
 	hart_allow_interrupts();
 	hart_enable_intr(INTR_MACHINE_SOFTWARE_TRIG);
@@ -720,28 +816,54 @@ hart_init(void)
 		/* Make sure there is only one mapping for our hart_id. Since this is hardcoded in target_config.h only do the check
 		 * durring debugging. It can't go wrong due to runtime behavior. */
 		if (matches != 1) {
-			ERR("Invalid IRQ target mapping for hart_id: %li (matches: %i)\n", hs->hart_id, matches);
 			hs->irq_map_idx = -1;
+			/* DEBUG-only: stash the match count in the per-hart errno
+			 * so the wakeup banner (hart_on_wakeup) can report where
+			 * the platform_intc_map is wrong: 0 => no mapping for this
+			 * hart_id, >1 => duplicate mappings. This deliberately
+			 * overloads errno; it's cleared right after being printed. */
+			hs->error = matches;
 		}
 	#endif
-	
-	/* Note: no side effects (e.g. hart_clear_ipi_mask()) inside DBG(),
-	 * its arguments are not evaluated on non-DEBUG builds. The IPI
-	 * mask is consumed by hart_on_mswtrig() anyway. */
-	DBG("HART %i UP: hart_id (from mhartid): %li, ipi_mask 0x%x, flags: 0x%x, irq_map_idx: %i, mstatus: %lx, mtvec: %lx\n",
-	    hs->hart_idx, hs->hart_id, hart_get_ipi_mask(hs), hart_get_flags(hs), hs->irq_map_idx, csr_read(CSR_MSTATUS), csr_read(CSR_MTVEC));
+}
 
-	/* Trigger a re-seeding of rng state so that
-	 * the timing/order of hart registration influences
-	 * rng state (hoping to gather some entropy bits out
-	 * of this). */
-	(void)rng_get_seed();
+/* Main without arguments as per C spec */
+extern int main(void);
+
+extern void platform_init(void);
+
+/* Note: We arrive here with stack initialized, but .data/.bss may not be
+ * ready yet on secondary harts (hs->hart_idx > 0), so stick to hart-local
+ * variables. */
+void __attribute__((noreturn))
+hart_init(void)
+{
+	struct hart_state *hs = hart_get_hstate_self();
+	#if (PLAT_HART_VECTORED_TRAPS == 1)
+		/* Reference the vector table symbol - only visible in this function */
+		extern char hart_trap_vector_table[];
+		uintptr_t mtvec_val = (uintptr_t)hart_trap_vector_table | 1;
+	#else
+		uintptr_t mtvec_val = (uintptr_t)hart_direct_trap_handler & ~1;
+	#endif
+	csr_write(CSR_MTVEC, mtvec_val);
+
+	uint64_t misa = csr_read(CSR_MISA);
+	hart_init_fpu(hs, misa);
+	hart_init_vpu(hs, misa);
+	hart_init_counters(hs);
+	hart_init_sdtrig(hs);
+	hart_init_intr(hs);
 	hart_set_flags(hs, HS_FLAG_READY);
 
-	/* Good to go, if this is the boot hart jump to main() */
+	/* Good to go, if this is the boot hart go with the flow
+	 * and call platform_init before jumping to main() through
+	 * hart_jump_with_addrs. */
 	if (hs->hart_idx == 0) {
-		hart_set_flags(hs, HS_FLAG_RUNNING);
-		main();
+		platform_init();
+		hs->next_addr = (uintptr_t)main;
+		hart_on_wakeup(hs);
+		hart_dispatch();
 	} else {
 		/* If this is a secondary hart wait for an IPI, note that jumping
 		 * to a function is handled by the IPI handler. */

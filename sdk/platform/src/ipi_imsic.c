@@ -13,6 +13,7 @@
 #include <platform/riscv/csr.h>		/* For csr_read/write() */
 #include <platform/riscv/hart.h>	/* For hart state and macros (includes stdatomic.h) */
 #include <platform/riscv/mmio.h>	/* For mmio access to remote hstate/MSIP */
+#include <platform/utils/utils.h>	/* For ERR() */
 
 #if defined(PLAT_HAS_IMSIC) && (PLAT_IMSIC_IPI_EIID > 0)
 
@@ -37,6 +38,13 @@ extern const volatile struct irq_target_mapping platform_intc_map[PLAT_MAX_HARTS
 void
 ipi_send(struct hart_state* target_hs, enum ipi_type type)
 {
+	/* irq_map_idx is -1 for a hart whose hart_id isn't in platform_intc_map;
+	 * bail before indexing it (and before setting an IPI mask we can't
+	 * deliver) rather than reading platform_intc_map[-1]. */
+	if (target_hs->irq_map_idx < 0) {
+		ERR("Tried to IPI hart_idx %i with no IMSIC mapping\n", target_hs->hart_idx);
+		return;
+	}
 	hart_set_ipi(target_hs, (uint16_t) type);
 	uint16_t imsic_hart_idx = platform_intc_map[target_hs->irq_map_idx].target.hart_idx;
 	write32(SETEIPNUM_LE(imsic_hart_idx), PLAT_IMSIC_IPI_EIID);
@@ -47,6 +55,10 @@ void
 ipi_self(enum ipi_type type)
 {
 	struct hart_state *hs = hart_get_hstate_self();
+	if (hs->irq_map_idx < 0) {
+		ERR("Tried to self-IPI with no IMSIC mapping (hart_idx %i)\n", hs->hart_idx);
+		return;
+	}
 	hart_set_ipi(hs, (uint16_t) type);
 	uint16_t imsic_hart_idx = platform_intc_map[hs->irq_map_idx].target.hart_idx;
 	write32(SETEIPNUM_LE(imsic_hart_idx), PLAT_IMSIC_IPI_EIID);

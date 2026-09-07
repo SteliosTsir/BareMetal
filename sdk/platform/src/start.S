@@ -183,14 +183,18 @@ FUNC_START _start
 			 * lottery path (when status was already "ready"), so the
 			 * fence has to live here to cover both. */
 			fence	r, rw
-			/* Counter is ready, atomically get our index */
-			li	t0, 1
-			amoadd.w t3, t0, (HART_COUNTER_ADDR)
-			addi	HART_IDX, t3, 1	/* Add 1 to old value, HART_IDX now has our index */
-
-			/* Sanity check - ensure we haven't exceeded max harts */
+			/* Claim our index with a bounded lr/sc loop: unlike a plain
+			 * amoadd it won't bump the counter for harts that don't fit,
+			 * which would inflate hart_get_count() and push init.c past
+			 * the end of the stack array. Excess harts just bail (the
+			 * dangling lr reservation is harmless, as in the lottery). */
 			li	t4, PLAT_MAX_HARTS
-			bgeu	HART_IDX, t4, .Ldone
+		.Lclaim_idx:
+			lr.w	t3, (HART_COUNTER_ADDR)	/* t3 = last assigned index */
+			addi	HART_IDX, t3, 1		/* candidate index = last + 1 */
+			bgeu	HART_IDX, t4, .Ldone	/* too many harts, bail */
+			sc.w	t5, HART_IDX, (HART_COUNTER_ADDR) /* publish as new last */
+			bnez	t5, .Lclaim_idx		/* sc failed (contention), retry */
 
 			/* With an index at hand, we can proceed with initializing
 			 * the hart's stack and hart_state structure. */
