@@ -872,6 +872,7 @@ hart_init(void)
 		}
 	}
 
-	DBG("HART %li done\n", hs->hart_idx);
+	/* Both branches above are non-returning; hart_hang() is just a safety
+	 * net in case that ever changes. */
 	hart_hang();
 }

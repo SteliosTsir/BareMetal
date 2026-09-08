@@ -13,7 +13,6 @@
 #define NEED_HART_INTC_MAP
 #include <target_config.h>		/* For PLAT_* constants and DEFINE_PLATFORM_INTC_MAP */
 #undef NEED_HART_INTC_MAP
-#include <platform/interfaces/ipi.h>	/* For ipi_init() */
 #include <platform/interfaces/uart.h>	/* For uart_init() */
 #include <platform/riscv/csr.h>		/* For csr_read()/pause() */
 #include <platform/riscv/hart.h>	/* For hart_get_count/state() */

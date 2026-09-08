@@ -1384,7 +1384,6 @@ yalc_xprintf(struct output_info* restrict out, const char* restrict fmt, va_list
 				yalc_pf_field_out(&fld, &fi, out);
 			} else {
 				fld.inbuff = strval;
-				fld.inbuff_len = 6;
 				if (fi.flags & SFLAG_HAS_PREC && fi.precision >= 0)
 					fld.inbuff_len = strnlen(strval, fi.precision);
 				else

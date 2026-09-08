@@ -74,7 +74,7 @@ run_test_category(struct test_entry *tests_start, struct test_entry *tests_end, 
 	}
 }
 
-void
+int __attribute__((noreturn))
 main(void)
 {
 	int total_failures = 0;
@@ -106,13 +106,10 @@ main(void)
 				);
 				INF("\nTotal failures across all tests: %i\n", total_failures);
 				break;
-			case EOF:
-				break;
 			default:
 				INF("Invalid selection. Please try again.\n");
 				break;
 		}
 		pause();
 	}
-	INF("\n---===DONE===---\n");
 }
