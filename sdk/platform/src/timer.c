@@ -40,11 +40,43 @@ static struct timer_spec cyclecount_timer = {0};
 
 #ifndef PLAT_NO_MTIMER
 static struct timer_spec platform_timer = {0};
-/* We track the last measurement of each hart's cyclecount_timer
- * in the hart's hart_state, and here we track the last count of
- * the (global) platform_timer. */
-static uint64_t last_platform_tval = 0;
 #endif
+
+/* Compute (val * mult) >> shift without runtime division or a mandatory
+ * 128-bit type: on RV64 use the native path, on RV32 split val into 32-bit
+ * halves (only u32*u32->u64 products). shift is in [0, 32]. */
+static inline uint64_t
+timer_mul_shift(uint64_t val, uint32_t mult, uint32_t shift)
+{
+#if defined(__SIZEOF_INT128__)
+	return (uint64_t)(((unsigned __int128)val * mult) >> shift);
+#else
+	uint32_t lo = (uint32_t)val, hi = (uint32_t)(val >> 32);
+	uint64_t ret = ((uint64_t)lo * mult) >> shift;
+	if (hi)
+		ret += ((uint64_t)hi * mult) << (32 - shift);
+	return ret;
+#endif
+}
+
+/* Pick the largest shift (<= 32) that keeps a 32-bit multiplier for the ratio
+ * num/den, so timer_mul_shift(x, mult, shift) ~= x * num / den. Since the full
+ * product is evaluated there, mult only has to fit 32 bits (no max-interval
+ * cap) and a larger shift just buys precision. This is Linux's
+ * clocks_calc_mult_shift() without the range limit. */
+static void
+timer_calc_mult_shift(uint64_t num, uint64_t den, uint32_t *mult, uint32_t *shift)
+{
+	uint64_t m = 0;
+	uint32_t s;
+	for (s = 32; s > 0; s--) {
+		m = ((num << s) + (den >> 1)) / den;
+		if ((m >> 32) == 0)
+			break;
+	}
+	*mult = (uint32_t)m;
+	*shift = s;
+}
 
 /* Initialize a timer parameters for the given clock frequency,
  * and/or return the cached version. Note: We could init params
@@ -77,90 +109,31 @@ timer_get_spec(timerid_t timerid)
 	if (timer->clock_freq > 0)
 		return timer;
 
-	uint32_t divisor = 0;
 	timer->res.tv_sec = 0;
 	timer->res.tv_nsec = 0;
 
-	/* Start with nanoseconds and go down to 100msec */
-	for (divisor = NSECS_IN_SEC; divisor >= 100; divisor /= 10) {
+	/* Resolution: smallest power-of-ten period the clock can represent,
+	 * from 1ns down to 100ms. */
+	for (uint32_t divisor = NSECS_IN_SEC; divisor >= 100; divisor /= 10) {
 		if (clock_freq >= divisor) {
 			timer->res.tv_nsec = NSECS_IN_SEC / divisor;
 			break;
 		}
 	}
 
-	/* This shouldn't happen, I mean the clock should at least
-	 * run at a few KHz or else is kinda useless, if we are here
-	 * it's less than 100Hz. */
+	/* Slower than 100Hz is kinda useless; fall back to a 1s resolution. */
 	if (!timer->res.tv_nsec)
 		timer->res.tv_sec = 1;
 
-	/* In order to calculate nsecs from cycles we need to calculate
-	 * nsecs = (cycles/clock_freq) * NSECS_IN_SEC, however we don't
-	 * want to use floats/doubles, and we also want to avoid division.
-	 * So instead of division we'll use shifts and look for a pair of
-	 * multiplier/shifter that would allow us to calculate the above
-	 * much faster. This comes from Linux's clocks_calc_mult_shift(). */
 	timer->clock_freq = clock_freq;
-	const uint32_t maxdelay_secs = 10;
 
-	/* Make sure a multiplication between maxdelay_secs and freq won't
-	 * overflow a 64bit integer. This assumes that the maximum
-	 * interval we'll measure will be up to maxdelay_secs. Larger intervals
-	 * may overflow. */
-	uint64_t tmp = ((uint64_t) maxdelay_secs * clock_freq) >> 32;
-	uint32_t shift_accumulator = 32;
-	while (tmp) {
-		tmp >>= 1;
-		shift_accumulator--;
-	}
-
-	uint64_t mult = 0;
-	uint32_t shift = 0;
-	/* Multiplier / shifter for (NSECS_IN_SEC / clock_freq) */
-	for (shift = 32; shift > 0; shift--) {
-		mult = ((uint64_t) NSECS_IN_SEC) << shift;
-		mult += timer->clock_freq >> 1;
-		mult /= timer->clock_freq;
-		if ((mult >> shift_accumulator) == 0)
-			break;
-	}
-
-	timer->mult_c2ns = mult;
-	timer->shift_c2ns = shift;
-
-	/* Same as above but for converting nsecs to cycles, so now we want
-	 * cycles = (nsecs / NSECS_IN_SEC) * clock_freq. */
-	tmp = ((uint64_t) maxdelay_secs * NSECS_IN_SEC) >> 32;
-	shift_accumulator = 32;
-	while (tmp) {
-		tmp >>= 1;
-		shift_accumulator--;
-	}
-
-	for (shift = 32; shift > 0; shift--) {
-		mult = ((uint64_t) timer->clock_freq) << shift;
-		mult += NSECS_IN_SEC >> 1;
-		mult /= NSECS_IN_SEC;
-		if ((mult >> shift_accumulator) == 0)
-			break;
-	}
-
-	timer->mult_ns2c = mult;
-	timer->shift_ns2c = shift;
-
-	/* Same but for nsecs to clock() cycles, so it's
-	 * cycles = (nsecs / NSECS_IN_SEC) * CLOCKS_PER_SEC */
-	for (shift = 32; shift > 0; shift--) {
-		mult = ((uint64_t) CLOCKS_PER_SEC) << shift;
-		mult += NSECS_IN_SEC >> 1;
-		mult /= NSECS_IN_SEC;
-		if ((mult >> shift_accumulator) == 0)
-			break;
-	}
-
-	timer->mult_c2c = mult;
-	timer->shift_c2c = shift;
+	/* Precompute a multiplier/shift per conversion so the hot paths avoid
+	 * division (Linux's clocks_calc_mult_shift approach). timer_mul_shift()
+	 * evaluates the full-width product, so none of these carry a maximum-
+	 * interval limit. */
+	timer_calc_mult_shift(NSECS_IN_SEC, clock_freq, &timer->mult_c2ns, &timer->shift_c2ns);   /* cycles -> nsecs */
+	timer_calc_mult_shift(clock_freq, NSECS_IN_SEC, &timer->mult_ns2c, &timer->shift_ns2c);   /* nsecs  -> cycles */
+	timer_calc_mult_shift(CLOCKS_PER_SEC, NSECS_IN_SEC, &timer->mult_c2c, &timer->shift_c2c); /* nsecs  -> clock() ticks */
 
 	return timer;
 }
@@ -169,37 +142,38 @@ static uint64_t __attribute__((noinline))
 timer_sample(timerid_t timerid, const struct timer_spec **_Nullable tspec)
 {
 	const struct timer_spec *timer = NULL;
-	uint64_t cycles = 0;
 	uint64_t tval = 0;
 	switch (timerid) {
 		case PLAT_TIMER_RTC:
 		case PLAT_TIMER_MTIMER:
 			#ifndef PLAT_NO_MTIMER
 				timer = timer_get_spec(timerid);
-				if (last_platform_tval == 0)
-					mtimer_reset_num_ticks();
-				cycles = mtimer_get_num_ticks();
-				mtimer_reset_num_ticks();
-				tval = (cycles * timer->mult_c2ns) >> timer->shift_c2ns;
-				tval += last_platform_tval;
-				last_platform_tval = tval;
+				/* mtime is the shared, free-running wall clock: convert
+				 * its absolute value. Stateless, so every hart reads a
+				 * coherent time and we never write mtime (which would
+				 * disturb other harts and their mtimecmp sleeps). */
+				tval = timer_mul_shift(mtimer_get_num_ticks(),
+						       timer->mult_c2ns, timer->shift_c2ns);
 				break;
 			#else
 				/* Fallthrough */
 			#endif
-		case PLAT_TIMER_CYCLES:
+		case PLAT_TIMER_CYCLES: {
 			timer = timer_get_spec(timerid);
 			struct hart_state *hs = hart_get_hstate_self();
-			if (hs->last_cyclecount_tval == 0) {
-				hart_reset_counter(HC_CYCLES);
+			/* mcycle is per-hart and free-running; capture a base on
+			 * first use so CYCLES reads as CPU-time-since-first-use
+			 * without ever resetting the counter. A read of mcycle is
+			 * never 0 (mandatory and left running by
+			 * CSR_MCOUNTINHIBIT_INIT), so base == 0 is a safe "unset". */
+			if (hs->cyclecount_base == 0) {
 				hart_enable_counter(HC_CYCLES);
+				hs->cyclecount_base = hart_get_counter(HC_CYCLES);
 			}
-			cycles = hart_get_counter(HC_CYCLES);
-			hart_reset_counter(HC_CYCLES);
-			tval = (cycles * timer->mult_c2ns) >> timer->shift_c2ns;
-			tval += hs->last_cyclecount_tval;
-			hs->last_cyclecount_tval = tval;
+			uint64_t cycles = hart_get_counter(HC_CYCLES) - hs->cyclecount_base;
+			tval = timer_mul_shift(cycles, timer->mult_c2ns, timer->shift_c2ns);
 			break;
+		}
 		default:
 			ERR("Tried to sample unknown timerid: %i\n", timerid);
 			return 0;
@@ -236,8 +210,7 @@ timer_get_num_ticks(timerid_t timerid)
 	uint64_t nsecs = timer_sample(timerid, &timer);
 	if (!timer)
 		return 0;
-	uint64_t cycles = (nsecs * timer->mult_c2c) >> timer->shift_c2c;
-	return cycles;
+	return timer_mul_shift(nsecs, timer->mult_c2c, timer->shift_c2c);
 }
 
 uint64_t
@@ -246,7 +219,7 @@ timer_nsecs_to_cycles(timerid_t timerid, uint64_t nsecs)
 	const struct timer_spec *timer = timer_get_spec(timerid);
 	if (!timer)
 		return 0;
-	return (nsecs * timer->mult_ns2c) >> timer->shift_ns2c;
+	return timer_mul_shift(nsecs, timer->mult_ns2c, timer->shift_ns2c);
 }
 
 void
@@ -256,7 +229,7 @@ timer_nanosleep(timerid_t timerid, uint64_t nsecs)
 	const struct timer_spec *timer = timer_get_spec(timerid);
 	if (!timer)
 		return;
-	uint64_t cycles_to_wait = (nsecs * timer->mult_ns2c) >> timer->shift_ns2c;
+	uint64_t cycles_to_wait = timer_mul_shift(nsecs, timer->mult_ns2c, timer->shift_ns2c);
 
 	switch (timerid) {
 	case PLAT_TIMER_RTC:

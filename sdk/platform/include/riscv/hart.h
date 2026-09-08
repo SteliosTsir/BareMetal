@@ -63,8 +63,8 @@ struct hart_state {
 	/* Reserved for future use */
 	uint32_t reserved;
 
-	/* See timer.c */
-	uint64_t last_cyclecount_tval;
+	/* Per-hart base for the cycle-counter timer (see timer.c) */
+	uint64_t cyclecount_base;
 
 	/* Used for program's per-hart internal state */
 	void* internal;

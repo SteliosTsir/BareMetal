@@ -56,12 +56,6 @@ mtimer_get_num_ticks() {
 }
 
 static inline void
-mtimer_reset_num_ticks()
-{
-	write64(MTIME_BASE, 0);
-}
-
-static inline void
 mtimer_enable_irq(void)
 {
 	csr_set_bits(CSR_MIE, (1 << INTR_MACHINE_TIMER));
