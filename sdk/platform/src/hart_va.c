@@ -173,22 +173,27 @@ int hart_va_map_range(uintptr_t phys_addr, size_t *size, uint64_t mode, bool nap
 		return -EADDRNOTAVAIL;
 	}
 
-	/* Calculate how many PTEs we need */
-	size_t num_ptes = (*size + page_size - 1) / page_size;
-	size_t max_ptes = PAGE_SIZE / sizeof(uint64_t);
+	/* A 64KB NAPOT region is aliased across 16 consecutive 4KB leaf entries
+	 * that all hold the identical PTE value (the walker derives pa[15:12] from
+	 * va[15:12]); a plain 4KB page uses a single entry. */
+	size_t slots_per_region = napot ? (NAPOT_64KB_SIZE / PAGE_SIZE) : 1;
 
-	if (num_ptes > max_ptes)
-		num_ptes = max_ptes;
+	/* Calculate how many regions we need, bounded by the single leaf table */
+	size_t num_regions = (*size + page_size - 1) / page_size;
+	size_t max_regions = (PAGE_SIZE / sizeof(uint64_t)) / slots_per_region;
+
+	if (num_regions > max_regions)
+		num_regions = max_regions;
 
 	/* Update size with actual VA space we'll map */
-	*size = num_ptes * page_size;
+	*size = num_regions * page_size;
 
 	DBG("VA: Mapping PA 0x%lx -> VA 0x0 at level %u (%lu %s, %lu bytes total)\n",
-	    phys_addr, leaf_level, num_ptes, napot ? "64KB pages" : "4KB pages", *size);
+	    phys_addr, leaf_level, num_regions, napot ? "64KB pages" : "4KB pages", *size);
 
-	/* Create leaf PTEs */
-	for (size_t i = 0; i < num_ptes; i++) {
-		uintptr_t pte_phys = phys_addr + (i * page_size);
+	/* Create leaf PTEs (NAPOT regions replicate across their 16 aliases) */
+	for (size_t r = 0; r < num_regions; r++) {
+		uintptr_t pte_phys = phys_addr + (r * page_size);
 		uint64_t ppn = pte_phys >> 12;
 		uint64_t pte = (ppn << 10) | PTE_V | PTE_R | PTE_W | PTE_U | PTE_A | PTE_D;
 
@@ -200,8 +205,10 @@ int hart_va_map_range(uintptr_t phys_addr, size_t *size, uint64_t mode, bool nap
 			pte |= PTE_N;
 		}
 
-		leaf_pt[i] = pte;
-		DBG("VA:   PTE[%lu] = 0x%016lx (PA 0x%lx)\n", i, pte, pte_phys);
+		for (size_t k = 0; k < slots_per_region; k++)
+			leaf_pt[r * slots_per_region + k] = pte;
+		DBG("VA:   region[%lu] PTE = 0x%016lx (PA 0x%lx) x%lu\n",
+		    r, pte, pte_phys, slots_per_region);
 	}
 
 	/* Set SATP with the root page table and mode */
