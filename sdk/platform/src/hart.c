@@ -17,6 +17,8 @@
 #include <platform/riscv/caps.h>	/* For CAP_* macros */
 #include <platform/interfaces/rng.h>	/* For rng_get_seed() */
 #include <platform/utils/lock.h>	/* For lock_acquire/release() */
+#include <platform/utils/attribute_macros.h>	/* For __trap_handler etc. */
+#include <platform/riscv/pmp.h>		/* For hart_init_pmp() */
 
 #include <errno.h>			/* For errno and error constants */
 
@@ -208,26 +210,6 @@ hart_dispatch(void)
 /***************\
 * TRAP HANDLING *
 \***************/
-
-/*
- * Pseudo-keywords for readability when declaring trap handlers
- * In case of vectored traps, each trap handler is standalone and should contain
- * the whole intro/exit +mret sequence required. All stub handlers are declared
- * as aliases of the default trap handler for clarity. In case a single handler is
- * used for all traps, trap handlers are declared as static inline so that they
- * become part of the direct trap handler. Weak handlers are functions called by
- * trap handlers that applications can override. Since trap handlers are not
- * called from other functions, we need to declare them as used otherwise LTO
- * and / or --gc-sections may throw them away.
- */
-#define __weak_handler	__attribute__((weak))
-#if (PLAT_HART_VECTORED_TRAPS == 1)
-	#define __trap_handler	static __attribute__((used, interrupt("machine"), optimize("align-functions=8"), section(".text.trap_handlers")))
-#else
-	#define __trap_handler	static inline
-	#define __direct_trap_handler static __attribute__((used, interrupt("machine"), optimize("align-functions=8")))
-#endif
-#define __empty_trap_handler	__trap_handler __attribute__((alias("hart_default_trap_handler")))
 
 void __trap_handler
 hart_default_trap_handler(void)
@@ -851,6 +833,11 @@ hart_init(void)
 	uint64_t misa = csr_read(CSR_MISA);
 	hart_init_fpu(hs, misa);
 	hart_init_vpu(hs, misa);
+
+	/* Set up this hart's physical memory protection (no-op if PMP is
+	 * unavailable/disabled for this target). */
+	hart_init_pmp();
+
 	hart_init_counters(hs);
 	hart_init_sdtrig(hs);
 	hart_init_intr(hs);

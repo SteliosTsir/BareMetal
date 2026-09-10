@@ -39,6 +39,9 @@
 #define PLAT_RAM_BASE		(PLAT_SYSRAM_BASE + PLAT_SYSRAM_SIZE - PLAT_RAM_SIZE)
 #define	PLAT_STACK_SIZE		8 * KB
 
+/* Number of PMP entries this hart implements (0 disables PMP support) */
+#define PLAT_PMP_REGIONS	16
+
 #if defined(LDSCRIPT)
 ___rom = PLAT_ROM_BASE;
 ___rom_size = PLAT_ROM_SIZE;

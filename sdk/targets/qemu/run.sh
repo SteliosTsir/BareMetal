@@ -26,10 +26,10 @@ else
 	fi
 fi
 
-# virt's default CPU is rv64 with Svnapot off, so the capability probe
-# reports NAPOT unsupported (as it does on the qemu-aia/qemu-aplic targets).
-# Enable it here to exercise the Svnapot mapping path and give a comparison.
-qemu-system-riscv64 -machine virt${DTB_OPT} -cpu rv64,svnapot=on -serial stdio -nographic -monitor null -s -bios none \
+# virt's default CPU is rv64 with Svnapot and Smepmp off. Enable both here so
+# the probe exercises the NAPOT mapping path and the ePMP mseccfg.RLB path,
+# and to give a comparison vs qemu-aia/qemu-aplic which use the defaults.
+qemu-system-riscv64 -machine virt${DTB_OPT} -cpu rv64,svnapot=on,smepmp=on -serial stdio -nographic -monitor null -s -bios none \
 		    -smp 4 -m 2G -global virtio-mmio.force-legacy=false  \
 		    -netdev user,id=net0${TFTP_OPT} \
 		    -device virtio-net-device,netdev=net0 \
