@@ -11,6 +11,7 @@
 #include <platform/riscv/caps.h>	/* For CAP_* macros */
 #include <platform/utils/utils.h>	/* For ANN/INF */
 #include <test_framework.h>		/* For test registration macros */
+#include <z_extensions.h>		/* For checking z extensions */
 
 #include <stdint.h>			/* For typed ints */
 
@@ -171,6 +172,75 @@ print_big_endian_support(struct rvcaps *caps)
 		INF("  None\n");
 }
 
+static void print_isa_profiles(struct rvcaps *caps)
+{
+    /* Read basic bits from misa to get the base architecture */
+    unsigned long misa_val = csr_read(CSR_MISA);
+    int mxl = (misa_val >> 62) & 0x3;
+    int bits = (mxl == 1) ? 32 : ((mxl == 2) ? 64 : ((mxl == 3) ? 128 : 64));
+    char base_isa = (misa_val & CSR_MISA_I) ? 'I' : 'E';
+
+    INF("\nBase Architecture:\n");
+    INF("  RV%d%c (%d bits)\n", bits, base_isa, bits);
+
+    int has_i = (base_isa == 'I');
+    int has_s = (caps->s_caps & CAP_S) ? 1 : 0;
+    
+    /* RVA Base */
+    int is_rva_base = has_i && 
+                      (caps->r_caps & CAP_M) && 
+                      (caps->r_caps & CAP_A) && 
+                      (caps->r_caps & CAP_F) && 
+                      (caps->r_caps & CAP_D) && 
+                      (caps->r_caps & CAP_C);
+                      
+    int is_rva22_base = is_rva_base && (caps->r_caps & CAP_V);
+
+    INF("\nISA Profiles:\n");
+    INF("  RVI20U32 : %s\n", (bits == 32 && has_i) ? "Yes" : "No");
+    INF("  RVI20U64 : %s\n", (bits == 64 && has_i) ? "Yes" : "No");
+    
+    INF("  RVA20U64 : %s\n", (bits == 64 && is_rva_base) ? "Yes" : "No");
+    INF("  RVA20S64 : %s\n", (bits == 64 && is_rva_base && has_s) ? "Yes" : "No");
+    
+    INF("  RVA22U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
+    INF("  RVA22S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
+    
+    INF("  RVA23U64 : %s\n", (bits == 64 && is_rva22_base) ? "Yes" : "No");
+    INF("  RVA23S64 : %s\n", (bits == 64 && is_rva22_base && has_s) ? "Yes" : "No");
+    
+    INF("  RVB23U64 : No (Requires Z-ext parsing)\n");
+    INF("  RVB23S64 : No (Requires Z-ext parsing)\n");
+	
+}
+
+void probe_and_print_z_extensions(void) {
+    INF("\nUnprivileged Z-Extensions (via Hardware Trap Probing):\n");
+
+    /* Bit Manipulation */
+    INF("  Bit Manipulation:\n");
+    INF("    Zba (Address generation)      : %s\n", check_zba_extension() ? "Yes" : "No");
+    INF("    Zbb (Basic bit-manipulation)  : %s\n", check_zbb_extension() ? "Yes" : "No");
+    INF("    Zbc (Carry-less multiply)     : %s\n", check_zbc_extension() ? "Yes" : "No");
+    INF("    Zbs (Single-bit operations)   : %s\n", check_zbs_extension() ? "Yes" : "No");
+
+    /* Conditional Operations */
+    INF("  Conditional Operations:\n");
+    INF("    Zicond (Integer conditionals) : %s\n", check_zicond_extension() ? "Yes" : "No");
+
+    /* Atomics */
+    INF("  Atomics:\n");
+    INF("    Zawrs (Wait-on-reservation)   : %s\n", check_zawrs_extension() ? "Yes" : "No");
+    INF("    Zacas (Compare-and-swap)      : %s\n", check_zacas_extension() ? "Yes" : "No");
+    INF("    Zabha (Byte/halfword atomics) : %s\n", check_zabha_extension() ? "Yes" : "No");
+
+    /* Floating-Point */
+    INF("  Floating-Point:\n");
+    INF("    Zfh (Half-precision FP)       : %s\n", check_zfh_extension() ? "Yes" : "No");
+    INF("    Zfa (Additional FP)           : %s\n", check_zfa_extension() ? "Yes" : "No");
+
+}
+
 static int
 print_caps(void)
 {
@@ -223,6 +293,12 @@ print_caps(void)
 		uint16_t vlen = vlenb * 8;
 		INF("Vector Length (VLEN): %u bits (%u bytes)\n", vlen, vlenb);
 	}
+
+	/* ISA Profiles check */
+	print_isa_profiles(&caps);
+
+	/* Supported Z extensions check*/
+	probe_and_print_z_extensions();
 
 	INF("\nPress a key to continue...\n");
 	return 0;
