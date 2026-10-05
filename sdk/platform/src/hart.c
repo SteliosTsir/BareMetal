@@ -524,7 +524,7 @@ hart_exception_handler(void) {
 __asm__(
 	".section .text.tvec_table, \"ax\", @progbits\n"
 	".align 3\n"
-	".local hart_trap_vector_table\n" 
+	".globl hart_trap_vector_table\n" 							/* EDITED : set .local to .globl*/
 	".type hart_trap_vector_table, @object\n"
 	"hart_trap_vector_table:\n"
 
