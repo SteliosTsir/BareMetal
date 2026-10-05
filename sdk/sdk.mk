@@ -12,6 +12,11 @@ OBJ_DIR = $(BUILD_DIR)/.obj
 YALIBC_OBJ_DIR = $(OBJ_DIR)/yalibc
 PLATFORM_OBJ_DIR = $(OBJ_DIR)/platform
 
+# Litmus directories
+LITMUS_GEN = ../tools/litmus_gen
+LITMUS_SRC_DIR = $(CURDIR)/../tests/litmus_tests
+LITMUS_OUT_DIR = testsuite/gen_litmus_tests
+
 # SDK CFLAGS (SDK includes already in CFLAGS from build.mk)
 SDK_CFLAGS = $(CFLAGS) -DDEBUG
 
@@ -47,16 +52,33 @@ TESTSUITE_BINS = $(foreach target,$(ALL_TARGETS),$(BUILD_DIR)/bm_testsuite.$(tar
 # Testsuite linker script
 TESTSUITE_LDSCRIPT = testsuite/test_sections.ld
 
-.PHONY: all clean libs ldscripts testsuite test dtb help
+GENERATED_C = $(patsubst $(LITMUS_SRC_DIR)/%.litmus, $(LITMUS_OUT_DIR)/%.c, $(LITMUS_FILES))
+LITMUS_FILES = $(wildcard $(LITMUS_SRC_DIR)/*.litmus)
+TESTSUITE_SOURCES += $(GENERATED_C)
 
-all: ldscripts libs testsuite
+$(LITMUS_GEN): ../tools/litmus_gen.c
+	@echo "[CC] Building Litmus Generator..."
+	@gcc -O2 -o $@ $<
+
+$(LITMUS_OUT_DIR):
+	mkdir -p $(LITMUS_OUT_DIR)
+
+$(LITMUS_OUT_DIR)/%.c: $(LITMUS_SRC_DIR)/%.litmus $(LITMUS_GEN) | $(LITMUS_OUT_DIR)
+	@echo "[LITMUS] Generating $@ from $<"
+	$(LITMUS_GEN) $< $@
+
+
+.PHONY: all clean libs ldscripts testsuite test dtb help litmus
+
+all: ldscripts libs testsuite litmus
 
 help:
 	@echo "BareMetal Build System"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  all              - Build SDK (libraries, linker scripts, testsuite) for all targets"
+	@echo "  all              - Build SDK (libraries, linker scripts, testsuite, litmus tests) for all targets"
 	@echo "  sdk              - Same as 'all'"
+	@echo "  litmus           - Build Litmus Tests"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 	@echo ""
@@ -76,6 +98,13 @@ ldscripts: $(LDSCRIPTS)
 libs: $(LIBS)
 
 testsuite: $(TESTSUITE_BINS)
+
+litmus: $(GENERATED_C)
+	@echo "Source directory: $(LITMUS_SRC_DIR)"
+	@echo "Found litmus files: $(LITMUS_FILES)"
+	@echo "Generated C files list: $(GENERATED_C)"
+	@echo "[DONE] All litmus tests parsed and ready in $(LITMUS_OUT_DIR)"
+
 
 # Test target - requires TARGET variable to be set
 test:
@@ -137,6 +166,10 @@ $(YALIBC_OBJ_DIR)/%.o: yalibc/src/%.c | $(YALIBC_OBJ_DIR) $(BUILD_DIR)
 define TESTSUITE_OBJ_RULES
 TESTSUITE_OBJS_$(1) = $$(patsubst %.c,$$(TESTSUITE_OBJ_DIR)/%.$(1).o,$$(notdir $$(TESTSUITE_SOURCES)))
 
+$$(TESTSUITE_OBJ_DIR)/%.$(1).o: $$(LITMUS_OUT_DIR)/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
+
 $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/%.c | $$(TESTSUITE_OBJ_DIR) $$(BUILD_DIR)
 	$$(MSG) "  [CC]   $$@"
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
@@ -185,6 +218,8 @@ clean:
 	@echo "Cleaning SDK build artifacts..."
 	rm -rf $(OBJ_DIR)
 	rm -rf $(LDSCRIPT_DIR)
+	rm -rf $(LITMUS_OUT_DIR)
+	rm $(LITMUS_GEN)
 	rm -f $(BUILD_DIR)/libplatform_*.a
 	rm -rf $(BUILD_DIR)/bm_testsuite.*
 

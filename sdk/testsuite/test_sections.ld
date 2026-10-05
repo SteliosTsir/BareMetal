@@ -30,4 +30,11 @@ SECTIONS
 		. = ALIGN(16);
 		__stop_rodata_tests_platform = .;
 	} > rom :rodata
+
+	.tests_litmus : {
+        __start_rodata_tests_litmus = .;
+        KEEP(*(__tests_litmus))
+        . = ALIGN(16);
+        __stop_rodata_tests_litmus = .;
+    } > rom
 }
