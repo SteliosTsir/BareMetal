@@ -26,10 +26,10 @@
  */
 #define __weak_handler	__attribute__((weak))
 #if (PLAT_HART_VECTORED_TRAPS == 1)
-	#define __trap_handler	static __attribute__((used, interrupt("machine"), optimize("align-functions=8"), section(".text.trap_handlers")))
+	#define __trap_handler __attribute__((used, interrupt("machine"), optimize("align-functions=8"), section(".text.trap_handlers"))) // removed static for modbus
 #else
 	#define __trap_handler	static inline
-	#define __direct_trap_handler static __attribute__((used, interrupt("machine"), optimize("align-functions=8")))
+	#define __direct_trap_handler __attribute__((used, interrupt("machine"), optimize("align-functions=8"))) // removed static for modbus
 #endif
 #define __empty_trap_handler	__trap_handler __attribute__((alias("hart_default_trap_handler")))
 

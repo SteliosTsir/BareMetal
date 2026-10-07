@@ -83,13 +83,16 @@ memset(void* restrict dst_ptr, int c, size_t len)
 	unsigned long bytes = (unsigned long) byte * ONES;
 	size_t remaining = len;
 
-	/* Fill up dst up to the alignment boundary */
-	for(; dst.as_uptr & WORD_MASK; remaining--)
-		*dst.as_bytes++ = byte;
+	/* PATCH: Only attempt word alignment if len is large enough to contain full words */
+	if (remaining >= WORD_SIZE) {
+		/* Fill up dst up to the alignment boundary */
+		for(; dst.as_uptr & WORD_MASK; remaining--)
+			*dst.as_bytes++ = byte;
 
-	/* Fill up remaining words */
-	for(; remaining >= WORD_SIZE; remaining -= WORD_SIZE)
-		*dst.as_ulong++ = bytes;
+		/* Fill up remaining words */
+		for(; remaining >= WORD_SIZE; remaining -= WORD_SIZE)
+			*dst.as_ulong++ = bytes;
+	}
 
 	while(remaining-- > 0)
 		*dst.as_bytes++ = byte;
