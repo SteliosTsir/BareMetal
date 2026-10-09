@@ -17,6 +17,7 @@ int uart_getc(void);
 void uart_putc(unsigned char c);
 void uart_enable_irq(void);
 void uart_disable_irq(void);
+void uart_putc_raw(uint8_t c);
 
 typedef void (*uart_irq_handler_t)(uint16_t source_id);
 void uart_set_irq_handler(uart_irq_handler_t new_handler);

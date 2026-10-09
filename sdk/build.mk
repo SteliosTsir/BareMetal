@@ -51,7 +51,7 @@ CFLAGS += -I $(GCC_INCLUDE)
 
 # LTO settings - mandatory for all builds
 # When debugging comment this out and uncomment the one below
-CFLAGS += -flto=auto 
+CFLAGS += -flto=auto
 #CFLAGS += -ffunction-sections -fdata-sections -g
 
 # Linker options

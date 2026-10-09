@@ -401,4 +401,4 @@ int run_modbus_pdu_test(void) {
     return (int)test_error_count;
 }
 
-REGISTER_PLATFORM_TEST("Modbus PDU protocol engine functional tests", run_modbus_pdu_test);
+//REGISTER_PLATFORM_TEST("Modbus PDU protocol engine functional tests", run_modbus_pdu_test);

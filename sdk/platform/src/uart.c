@@ -210,6 +210,16 @@ uart_irq_trampoline(uint16_t source_id)
 		DBG("UART interrupt received but no handler installed\n");
 }
 
+void
+uart_putc_raw(uint8_t c)
+{
+    /* Wait for transmit holding register to be empty */
+    while (!(uart_read(UART_LSR_OFFSET) & UART_LSR_THRE));
+
+    /* Send exact byte without \r translation */
+    uart_write(UART_THR_OFFSET, c);
+}
+
 REGISTER_IRQ_SOURCE(uart0_rx, {
 	.source.wire_id = PLAT_UART_IRQ,
 	.handler = uart_irq_trampoline,

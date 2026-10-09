@@ -1,8 +1,14 @@
 # BareMetal Top-Level Makefile
 
-.PHONY: all clean sdk test dtb help
+.PHONY: all clean sdk test dtb help modbus-demo modbus-demo-build
 
 all: sdk litmus
+
+modbus-demo-build:
+	$(MAKE) -C sdk -f sdk.mk modbus-demo-build TARGET=$(or $(TARGET),qemu)
+
+modbus-demo:
+	$(MAKE) -C sdk -f sdk.mk modbus-demo TARGET=$(or $(TARGET),qemu) ORIGINAL_PWD=$(CURDIR)
 
 help:
 	$(MAKE) -C sdk -f sdk.mk help

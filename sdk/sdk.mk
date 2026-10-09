@@ -49,6 +49,12 @@ LIBS = $(foreach target,$(ALL_TARGETS),$(BUILD_DIR)/libplatform_$(target).a)
 LDSCRIPTS = $(foreach target,$(ALL_TARGETS),$(LDSCRIPT_DIR)/bmmap.$(target).ld)
 TESTSUITE_BINS = $(foreach target,$(ALL_TARGETS),$(BUILD_DIR)/bm_testsuite.$(target))
 
+# Demo application (standalone Modbus RTU slave)
+MODBUS_DEMO_SOURCES = $(wildcard demo/*.c)
+MODBUS_DEMO_OBJ_DIR = $(OBJ_DIR)/demo
+# Only the selected TARGET if given, otherwise every target
+MODBUS_DEMO_BINS = $(foreach target,$(or $(TARGET),$(ALL_TARGETS)),$(BUILD_DIR)/bm_modbus_demo.$(target))
+
 # Testsuite linker script
 TESTSUITE_LDSCRIPT = testsuite/test_sections.ld
 
@@ -68,7 +74,7 @@ $(LITMUS_OUT_DIR)/%.c: $(LITMUS_SRC_DIR)/%.litmus $(LITMUS_GEN) | $(LITMUS_OUT_D
 	$(LITMUS_GEN) $< $@
 
 
-.PHONY: all clean libs ldscripts testsuite test dtb help litmus
+.PHONY: all clean libs ldscripts testsuite test dtb help litmus modbus-demo modbus-demo-build
 
 all: ldscripts libs testsuite litmus
 
@@ -79,6 +85,8 @@ help:
 	@echo "  all              - Build SDK (libraries, linker scripts, testsuite, litmus tests) for all targets"
 	@echo "  sdk              - Same as 'all'"
 	@echo "  litmus           - Build Litmus Tests"
+	@echo "  modbus-demo-build       - Build the Modbus RTU demo (make TARGET=<target> demo-build)"
+	@echo "  modbus-demo             - Build and run the Modbus RTU demo (make TARGET=<target> demo)"
 	@echo "  clean            - Clean all build artifacts"
 	@echo "  help             - Show this help message"
 	@echo ""
@@ -124,6 +132,22 @@ endif
 	@echo "Running testsuite for target: $(TARGET)"
 	@ORIGINAL_PWD=$(ORIGINAL_PWD) bash $(SDK_TARGETS_DIR)/$(TARGET)/run.sh $(BUILD_DIR)/bm_testsuite.$(TARGET).bin
 
+modbus-demo-build: $(MODBUS_DEMO_BINS)
+
+# Build and run the Modbus RTU demo - requires TARGET variable to be set
+modbus-demo: modbus-demo-build
+ifndef TARGET
+	@echo "Error: TARGET not specified. Usage: make TARGET=<target> demo"
+	@echo "Available targets: $(ALL_TARGETS)"
+	@exit 1
+endif
+	@if [ ! -f $(SDK_TARGETS_DIR)/$(TARGET)/run.sh ]; then \
+		echo "Error: No run.sh script found for target $(TARGET)"; \
+		exit 1; \
+	fi
+	@echo "Running Modbus demo for target: $(TARGET)"
+	@ORIGINAL_PWD=$(ORIGINAL_PWD) bash $(SDK_TARGETS_DIR)/$(TARGET)/run.sh $(BUILD_DIR)/bm_modbus_demo.$(TARGET).bin
+
 # DTB dump target - requires TARGET variable to be set
 dtb:
 ifndef TARGET
@@ -151,6 +175,9 @@ $(PLATFORM_OBJ_DIR): | $(OBJ_DIR)
 
 $(TESTSUITE_OBJ_DIR): | $(OBJ_DIR)
 	@mkdir -p $(TESTSUITE_OBJ_DIR)
+
+$(MODBUS_DEMO_OBJ_DIR): | $(OBJ_DIR)
+	@mkdir -p $(MODBUS_DEMO_OBJ_DIR)
 
 # Generate linker scripts - pattern rule for any target
 $(LDSCRIPT_DIR)/bmmap.%.ld: $(LDSCRIPT_TEMPLATE) | $(LDSCRIPT_DIR)
@@ -182,6 +209,23 @@ $$(TESTSUITE_OBJ_DIR)/%.$(1).o: testsuite/platform/%.c | $$(TESTSUITE_OBJ_DIR) $
 	$$(MSG) "  [CC]   $$@"
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -I testsuite/include -DDEBUG -c $$< -o $$@
 endef
+
+# Demo application: objects and binary for each target
+define MODBUS_DEMO_RULES
+MODBUS_DEMO_OBJS_$(1) = $$(patsubst demo/%.c,$$(MODBUS_DEMO_OBJ_DIR)/%.$(1).o,$$(MODBUS_DEMO_SOURCES))
+
+$$(MODBUS_DEMO_OBJ_DIR)/%.$(1).o: demo/%.c | $$(MODBUS_DEMO_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -c $$< -o $$@
+
+$$(BUILD_DIR)/bm_modbus_demo.$(1): $$(MODBUS_DEMO_OBJS_$(1)) $$(BUILD_DIR)/libplatform_$(1).a $$(LDSCRIPT_DIR)/bmmap.$(1).ld
+	$$(MSG) "  [LD]   $$@.elf"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) $$(MODBUS_DEMO_OBJS_$(1)) $$(call PLATFORM_LIB,$(1)) -o $$@.elf $$(LOPTS) -Wl,-u,memset -Wl,-u,memcpy -Wl,-u,memmove -Wl,-u,memcmp -T $$(LDSCRIPT_DIR)/bmmap.$(1).ld
+	$$(MSG) "  [BIN]  $$@.bin"
+	$$(Q)$$(OBJCOPY) $$(CPOPS) $$@.elf $$@.bin
+endef
+
+$(foreach target,$(ALL_TARGETS),$(eval $(call MODBUS_DEMO_RULES,$(target))))
 
 # Define a function to create build rules for each target
 define TARGET_RULES
@@ -222,5 +266,6 @@ clean:
 	rm $(LITMUS_GEN)
 	rm -f $(BUILD_DIR)/libplatform_*.a
 	rm -rf $(BUILD_DIR)/bm_testsuite.*
+	rm -rf $(BUILD_DIR)/bm_modbus_demo.*
 
 .DEFAULT_GOAL := all

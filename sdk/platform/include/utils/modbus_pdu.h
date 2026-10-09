@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <platform/riscv/hart.h>
 #include <platform/utils/utils.h>	/* For console output */
+#include <string.h>
 
 #define MODBUS_MAX_PDU_LEN 253
 
@@ -58,7 +59,5 @@ typedef struct {
 
 
 size_t modbus_process_pdu(const modbus_backend_t *backend, const uint8_t *req_pdu, size_t req_len, uint8_t *resp_pdu, size_t max_resp_len);
-
-
 
 #endif /* MODBUS_PDU_H */
