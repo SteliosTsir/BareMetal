@@ -71,6 +71,11 @@ ___num_harts = PLAT_MAX_HARTS;
 #define PLAT_MTIME_BASE		0
 #define PLAT_MTIMECMP_BASE	0
 
+/* Reading mtime from the 'time' CSR is the SDK default; force the MMIO read
+ * path here instead so that code path keeps getting exercised/tested (this
+ * is the only target that does). QEMU's CLINT implements mtime over MMIO. */
+#define PLAT_MTIMER_USE_TIME_CSR 0
+
 
 /*---=== IPIs ===---*/
 

@@ -46,6 +46,27 @@
 	#else
 		#define PLAT_HAS_MTIMER
 	#endif
+
+	/* Width (in bits) of the MMIO path to the 64-bit mtime/mtimecmp
+	 * registers. Some MTIMER implementations only decode <=32-bit MMIO
+	 * (device tree "clint,has-no-64bit-mmio"); set PLAT_MTIMER_MMIO_BITS to
+	 * 32 there so mtimer.h accesses the two halves separately. Defaults to a
+	 * native 64-bit access. */
+	#if !defined(PLAT_MTIMER_MMIO_BITS)
+		#define PLAT_MTIMER_MMIO_BITS 64
+	#elif (PLAT_MTIMER_MMIO_BITS != 32) && (PLAT_MTIMER_MMIO_BITS != 64)
+		#error "PLAT_MTIMER_MMIO_BITS must be 32 or 64"
+	#endif
+
+	/* Read mtime from the 'time' CSR instead of MMIO (see mtimer.h). On by
+	 * default: it is the standard, mode-agnostic way to read wall-clock time
+	 * and works even where the mtime MMIO register is absent. A target may
+	 * set it to 0 to force the MMIO read path. */
+	#if !defined(PLAT_MTIMER_USE_TIME_CSR)
+		#define PLAT_MTIMER_USE_TIME_CSR 1
+	#elif (PLAT_MTIMER_USE_TIME_CSR != 0) && (PLAT_MTIMER_USE_TIME_CSR != 1)
+		#error "PLAT_MTIMER_USE_TIME_CSR must be 0 or 1"
+	#endif
 #else
 	#define PLAT_NO_MTIMER
 #endif

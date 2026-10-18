@@ -50,9 +50,53 @@ mtimer_get_freq()
 	return (uint_fast32_t) PLAT_MTIMER_FREQ;
 }
 
+/*
+ * mtime/mtimecmp are 64-bit registers. On implementations whose MMIO bus
+ * only decodes 32-bit accesses (PLAT_MTIMER_MMIO_BITS == 32) a 64-bit load/
+ * store faults, so they must be accessed as two 32-bit halves - the way an
+ * RV32 hart always would. The helpers below hide that behind the configured
+ * access width.
+ *
+ * PLAT_MTIMER_USE_TIME_CSR: read mtime from the architected read-only 'time'
+ * CSR (0xC01, the Zicntr shadow of the memory-mapped mtime) instead of via
+ * MMIO. This is the standard, mode-agnostic way to read wall-clock time (one
+ * instruction, no bus access). mtimecmp is unaffected - it has no CSR form and
+ * is always written over MMIO, governed by PLAT_MTIMER_MMIO_BITS.
+ */
 static inline uint64_t
 mtimer_get_num_ticks() {
+#if (PLAT_MTIMER_USE_TIME_CSR)
+	return csr_read(CSR_TIME);
+#elif (PLAT_MTIMER_MMIO_BITS == 32)
+	/* Read the halves separately, retrying if the low half rolled over
+	 * into the high half between the two reads. */
+	volatile uint32_t *mt = (volatile uint32_t *)MTIME_BASE;
+	uint32_t hi, lo;
+	do {
+		hi = read32(&mt[1]);
+		lo = read32(&mt[0]);
+	} while (hi != read32(&mt[1]));
+	return ((uint64_t)hi << 32) | lo;
+#else
 	return read64(MTIME_BASE);
+#endif
+}
+
+/* Program this hart's mtimecmp, honouring the configured MMIO width. */
+static inline void
+mtimer_set_mtimecmp(uint64_t hart_id, uint64_t value)
+{
+#if (PLAT_MTIMER_MMIO_BITS == 32)
+	volatile uint32_t *cmp = (volatile uint32_t *)MTIMECMP_ADDR(hart_id);
+	/* Raise the high half to all-ones first so the intermediate value is
+	 * never earlier than either the old or the new target, avoiding a
+	 * spurious timer interrupt while the two halves are inconsistent. */
+	write32(&cmp[1], 0xFFFFFFFFU);
+	write32(&cmp[0], (uint32_t)value);
+	write32(&cmp[1], (uint32_t)(value >> 32));
+#else
+	write64(MTIMECMP_ADDR(hart_id), value);
+#endif
 }
 
 static inline void
@@ -72,20 +116,20 @@ mtimer_arm_after_ticks(uint64_t cycles)
 {
 	uint64_t hart_id = csr_read(CSR_MHARTID);
 	uint64_t current_count = mtimer_get_num_ticks();
-	write64(MTIMECMP_ADDR(hart_id), current_count + cycles);
+	mtimer_set_mtimecmp(hart_id, current_count + cycles);
 }
 
 static inline void
 mtimer_arm_at(uint64_t cycles)
 {
 	uint64_t hart_id = csr_read(CSR_MHARTID);
-	write64(MTIMECMP_ADDR(hart_id), cycles);
+	mtimer_set_mtimecmp(hart_id, cycles);
 }
 
 static inline void
 mtimer_disarm(void) {
 	uint64_t hart_id = csr_read(CSR_MHARTID);
-	write64(MTIMECMP_ADDR(hart_id), (uint64_t) -1);
+	mtimer_set_mtimecmp(hart_id, (uint64_t) -1);
 }
 
 #endif /* PLAT_NO_MTIMER */

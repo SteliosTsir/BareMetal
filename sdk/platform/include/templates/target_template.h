@@ -55,6 +55,20 @@ ___num_harts = PLAT_MAX_HARTS;
  * set to 0 if no CLINT is present */
 #define PLAT_CLINT_BASE		0x2000000
 
+/* Width (bits) of the MMIO path to the 64-bit mtime/mtimecmp registers,
+ * either 64 (default) or 32. Set to 32 on implementations whose MMIO bus
+ * only decodes 32-bit accesses (device tree "clint,has-no-64bit-mmio"),
+ * where a 64-bit access to these registers faults; mtimer.h then
+ * reads/writes them as two 32-bit halves. */
+//#define PLAT_MTIMER_MMIO_BITS	64
+
+/* Read mtime from the architected read-only 'time' CSR (0xC01, the Zicntr
+ * shadow of the memory-mapped mtime) instead of via MMIO. 1 (default) is the
+ * standard, mode-agnostic way to read wall-clock time; set to 0 to force the
+ * MMIO read path instead. mtimecmp is unaffected (always MMIO, per the width
+ * above). */
+//#define PLAT_MTIMER_USE_TIME_CSR 1
+
 /* MTIMER frequency in Hz, set to 0 to disable */
 #define	PLAT_MTIMER_FREQ	25000000
 
