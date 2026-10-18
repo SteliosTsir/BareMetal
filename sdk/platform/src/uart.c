@@ -56,6 +56,57 @@
 #define	UART_FCR_DMA_MODE	0x8	/* Enable DMA mode (RXRDY/TXRDY) */
 #define	UART_FCR_FIFO_TRIG_LVL	0x60	/* Mask for FIFO Trigger level */
 
+#define UART_IIR_ID_MASK	0x0F	/* Interrupt ID bits of the IIR */
+
+/*
+ * DesignWare APB UART (Synopsys "snps,dw-apb-uart") extensions.
+ *
+ * The DW APB UART is a widely used soft IP found on many SoCs. It is
+ * register-compatible with the 8250/16550 for the core registers above, so
+ * uart_getc()/uart_putc() need no changes; it only differs in a few places,
+ * all handled below behind PLAT_UART_DW_APB:
+ *
+ *  1) "Busy" behaviour. The DW UART refuses writes to the Line Control
+ *     Register while it is mid-transfer: the write is silently dropped and
+ *     a "busy detect" interrupt is raised instead (IIR id == 0x07). Since
+ *     setting DLAB to program the divisor is an LCR write, a UART left
+ *     active by a previous boot stage would never get reconfigured. We
+ *     guard the LCR writes in uart_init() by first quiescing the UART
+ *     (clear busy-detect via the status register, soft-reset it if it is
+ *     still busy via the Software Reset Register), and we swallow any
+ *     busy-detect interrupt in the IRQ path.
+ *
+ *  2) Fractional baud divisor. The DW UART has a Divisor Latch Fraction
+ *     (DLF) register that extends the integer divisor by 1/16th steps,
+ *     letting us hit odd baud rates exactly. For example, with a 25 MHz
+ *     reference clock at 115200 baud the ideal divisor is 13.56: the
+ *     integer-only 13 gives a ~4% baud error, while DLL=13 + DLF=9 lands
+ *     within ~0.01%.
+ *
+ * (The 32-bit, word-strided register access that these parts are often
+ * wired up with - reg-io-width = 4, reg-shift = 2 - is not a DW feature as
+ * such; it is already covered generically by PLAT_UART_SHIFTED_IO /
+ * PLAT_UART_REG_SHIFT.)
+ *
+ * Register offsets below are register *indices* (pre-shift), matching the
+ * UART_*_OFFSET convention above. Byte offsets are noted for reference.
+ */
+#if defined(PLAT_UART_DW_APB)
+#define UART_USR_OFFSET		0x1F	/* 0x7C: UART Status Register */
+#define UART_SRR_OFFSET		0x22	/* 0x88: Software Reset Register */
+#define UART_DLF_OFFSET		0x30	/* 0xC0: Divisor Latch Fraction */
+
+#define UART_USR_BUSY		0x01	/* UART is busy transferring data */
+
+#define UART_SRR_UR		0x01	/* UART soft reset */
+#define UART_SRR_RFR		0x02	/* RX FIFO reset */
+#define UART_SRR_XFR		0x04	/* TX FIFO reset */
+
+#define UART_IIR_BUSY_DETECT	0x07	/* IIR id for a busy-detect interrupt */
+
+#define UART_DLF_WIDTH		4	/* DLF is a 1/16th (4-bit) fraction */
+#endif /* PLAT_UART_DW_APB */
+
 /*********\
 * Helpers *
 \*********/
@@ -95,6 +146,27 @@ uart_init(void)
 {
 	uint16_t uart_divisor = (uint16_t) (PLAT_UART_CLOCK_HZ / (PLAT_UART_BAUD_RATE << 4));
 
+#if defined(PLAT_UART_DW_APB)
+	/* Fractional part of the divisor, in 1/16th steps (see DLF notes). */
+	uint32_t uart_div_rem = (uint32_t)(PLAT_UART_CLOCK_HZ % (PLAT_UART_BAUD_RATE << 4));
+	uint8_t uart_dlf = (uint8_t)(((uart_div_rem << UART_DLF_WIDTH) +
+				      ((PLAT_UART_BAUD_RATE << 4) >> 1)) /
+				     (PLAT_UART_BAUD_RATE << 4));
+	/* A fraction that rounds up to a full step carries into the integer. */
+	if (uart_dlf >> UART_DLF_WIDTH) {
+		uart_dlf = 0;
+		uart_divisor++;
+	}
+
+	/* Quiesce the controller before touching LCR: clear any pending
+	 * busy-detect, and if it is still mid-transfer (e.g. a prior stage
+	 * left it active) soft-reset it so our LCR writes are not dropped. */
+	if (uart_read(UART_USR_OFFSET) & UART_USR_BUSY)
+		uart_write(UART_SRR_OFFSET,
+			   UART_SRR_UR | UART_SRR_RFR | UART_SRR_XFR);
+	(void) uart_read(UART_USR_OFFSET);
+#endif
+
 	/* Disable interrupts */
 	uart_write(UART_IER_OFFSET, 0);
 
@@ -109,6 +181,11 @@ uart_init(void)
 	 * may also have left a non-zero value there. */
 	uart_write(UART_DLL_OFFSET, uart_divisor & 0xFF);
 	uart_write(UART_DLM_OFFSET, uart_divisor >> 8);
+
+#if defined(PLAT_UART_DW_APB)
+	/* Program the fractional divisor (DLAB does not gate this register). */
+	uart_write(UART_DLF_OFFSET, uart_dlf);
+#endif
 
 	/* Set Line Control Register:
 	 * 8 bits, no parity, one stop bit */
@@ -203,6 +280,16 @@ void uart_set_irq_handler(uart_irq_handler_t new_handler)
 static void
 uart_irq_trampoline(uint16_t source_id)
 {
+#if defined(PLAT_UART_DW_APB)
+	/* A busy-detect interrupt (raised when LCR is written while the UART
+	 * is busy) is cleared by reading the UART status register. It is not
+	 * an RX event, so acknowledge and swallow it to avoid a storm. */
+	if ((uart_read(UART_IIR_OFFSET) & UART_IIR_ID_MASK) == UART_IIR_BUSY_DETECT) {
+		(void) uart_read(UART_USR_OFFSET);
+		return;
+	}
+#endif
+
 	/* Safety check in case someone sets NULL */
 	if (uart_irq_handler != NULL)
 		uart_irq_handler(source_id);
