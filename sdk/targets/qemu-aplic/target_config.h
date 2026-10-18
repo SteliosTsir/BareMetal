@@ -60,9 +60,10 @@ ___num_harts = PLAT_MAX_HARTS;
  * set to 0 if no CLINT is present */
 #define PLAT_CLINT_BASE		0x2000000
 
-/* MTIMER frequency in Hz, set to 0 to disable */
-/* See note on PLAT_HART_FREQ, this is inaccurate too. */
-#define	PLAT_MTIMER_FREQ	9000000
+/* MTIMER frequency in Hz, set to 0 to disable.
+ * QEMU virt's mtime runs at a fixed 10MHz (its DTB timebase-frequency =
+ * 0x989680); this is exact for the machine, not an estimate. */
+#define	PLAT_MTIMER_FREQ	10000000
 
 /* In case of ACLINT, define MTIME/MTIMECMP separately */
 #define PLAT_MTIME_BASE		0
