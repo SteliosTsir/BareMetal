@@ -1,0 +1,201 @@
+/*
+ * SPDX-FileType: SOURCE
+ *
+ * SPDX-FileCopyrightText: 2025-2026 Nick Kossifidis <mick@ics.forth.gr>
+ * SPDX-FileCopyrightText: 2025-2026 ICS/FORTH
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/*
+ * Milk-V Duo S (Sophgo SG2000 / CVITek CV181x family).
+ *
+ * Values below come from the board device tree
+ * (cv181x_milkv_duos_sd.dts). We boot as the fip "MONITOR" image
+ * (replacing OpenSBI's fw_dynamic) on the application C906 core, so our
+ * image is loaded at, and runs from, the DRAM base (0x80000000). The
+ * second C906 ("c906_1"/little core) and the 8051 run their own firmware
+ * and never enter this image.
+ *
+ * Only the pieces we currently care about are described here: CLINT,
+ * PLIC and the two enabled UARTs, plus the UART interrupt wiring. The
+ * many CVITek-specific IP blocks in the DTS (VPU, ISP, codecs, ...) are
+ * intentionally left out.
+ */
+
+#ifndef _PLATFORM_H
+#define _PLATFORM_H
+
+/******\
+* CORE *
+\******/
+
+/*---=== HARTs ===---*/
+/* The DTS declares a single RISC-V application cpu (cpu@0). The little
+ * C906 that runs the RTOS payload is not part of this image. */
+#define PLAT_MAX_HARTS		1
+
+/* CPU cycle-counter (mcycle) frequency, used by the PLAT_TIMER_CYCLES clock.
+ * The DTS cpu "clock-frequency" just mirrors the 25MHz timebase (wrong for
+ * mcycle), but the cv181x_cooling node lists the real clk_cpu DVFS points -
+ * the top one (dev-freqs[0] = 0x32a9f880) is 850MHz, the speed the boot
+ * stages leave the big C906 running at. This only affects PLAT_TIMER_CYCLES
+ * accuracy; wall-clock time uses the MTIMER below. */
+#define	PLAT_HART_FREQ		850000000
+
+/*---=== Memory Layout ===---*/
+#define KB	1024
+#define MB	KB * 1024
+#define GB	MB * 1024
+
+/* DRAM as described by memory@80000000 (reg = <0x80000000 0x1fe00000>).
+ * Marked here so DMA-capable code knows the usable DRAM window. */
+#define	PLAT_SYSRAM_BASE	0x80000000
+#define	PLAT_SYSRAM_SIZE	0x1fe00000	/* 510 MB */
+
+/* The DTS reserves the first 512KB of DRAM (/memreserve/ 0x80000000
+ * 0x80000) for the boot monitor - that is exactly where the fip loads us
+ * (MONITOR_RUNADDR = 0x80000000). Keep .text/.rodata/.data(load) inside
+ * that reserved window ("rom"), and carve RAM for .data/.bss/stack right
+ * after it. */
+#define PLAT_ROM_BASE		0x80000000
+#define PLAT_ROM_SIZE		512 * KB
+#define PLAT_RAM_BASE		(PLAT_ROM_BASE + PLAT_ROM_SIZE)
+#define	PLAT_RAM_SIZE		2 * MB
+#define	PLAT_STACK_SIZE		8 * KB
+
+/* Number of PMP entries this hart implements (0 disables PMP support).
+ * The C906 has a PMP, but our image runs from DRAM (not a write-protected
+ * ROM), so the W^X story differs from the QEMU targets; leave it disabled
+ * until the mapping is validated on real hardware. */
+#define PLAT_PMP_REGIONS	0
+
+#if defined(LDSCRIPT)
+___rom = PLAT_ROM_BASE;
+___rom_size = PLAT_ROM_SIZE;
+___ram = PLAT_RAM_BASE;
+___ram_size = PLAT_RAM_SIZE;
+___stack_size = PLAT_STACK_SIZE;
+___num_harts = PLAT_MAX_HARTS;
+#endif
+
+/********************\
+* INTERRUPT HANDLING *
+\********************/
+
+/*---=== TIMER ===---*/
+
+/* SiFive-CLINT-compatible device: clint@74000000. */
+#define PLAT_CLINT_BASE		0x74000000
+
+/* The DTS marks this CLINT "clint,has-no-64bit-mmio": its MMIO bus only
+ * decodes 32-bit accesses, so mtimecmp must be written as two 32-bit halves
+ * (a 64-bit store faults). */
+#define PLAT_MTIMER_MMIO_BITS	32
+
+/* This C906 CLINT implements only msip + mtimecmp as MMIO; it does NOT
+ * implement the mtime register (a load from CLINT+0xBFF8 faults). mtime is
+ * read solely through the architected read-only 'time' CSR, which is the
+ * SDK default (PLAT_MTIMER_USE_TIME_CSR) - so nothing to set here; it is
+ * mandatory on this SoC rather than merely preferred. mtimecmp is still
+ * written over MMIO (see above, the 'time' CSR is read-only). */
+
+/* MTIMER frequency in Hz (cpus/timebase-frequency = 25MHz). */
+#define	PLAT_MTIMER_FREQ	25000000
+
+/* MTIME/MTIMECMP are part of the CLINT, derived from PLAT_CLINT_BASE. */
+#define PLAT_MTIME_BASE		0
+#define PLAT_MTIMECMP_BASE	0
+
+
+/*---=== IPIs ===---*/
+
+/* MSWI is part of the CLINT, leave 0 so it matches PLAT_CLINT_BASE. */
+#define PLAT_MSWI_BASE		0
+
+
+/*---=== External Interrupts ===---*/
+
+/* PLIC: interrupt-controller@70000000 ("riscv,plic0"),
+ * riscv,ndev = 0x65 (101), riscv,max-priority = 7. */
+#define PLAT_PLIC_BASE		0x70000000
+#define PLAT_APLIC_BASE		0
+#define PLIC_MAX_PRIORITY	7
+#define PLAT_NUM_IRQ_SOURCES	101
+
+/* No IMSIC on this SoC. */
+#define PLAT_IMSIC_BASE		0
+
+
+/**************\
+* CORE OPTIONS *
+\**************/
+/* Boot hart is picked by the lottery: the application core enters our
+ * image but its mhartid is not guaranteed to be 0, so don't hardcode it. */
+#define PLAT_BOOT_HART_ID	-1
+
+/* C906 supports vectored mtvec. */
+#define PLAT_HART_VECTORED_TRAPS 1
+
+/* Set to 1 to be used for sending IPIs via IMSIC,
+ * leave it 0 to use MSWI instead. */
+#define PLAT_IMSIC_IPI_EIID 0
+
+/* Set to 1 to force APLIC direct mode, bypassing IMSIC */
+#define PLAT_APLIC_FORCE_DIRECT 0
+
+/* Quirks */
+//#define PLAT_NO_WFI
+//#define PLAT_QUIRK_WFI_EPC
+
+/* The C906 sets misa.V but implements the T-Head 0.7.1 draft vector, not
+ * the ratified RVV 1.0: vstart/vcsr are absent and the vset/vector ops use
+ * a different encoding. Our RVV 1.0 VPU init (hart_init_vpu) would fault -
+ * the csrw/csrr get skipped as unimplemented, but the following vsetvli
+ * (an OP-V, non-SYSTEM opcode) is not skippable and hangs the hart. Skip
+ * VPU init entirely and leave the vector unit off (mstatus.VS = 0). */
+#define PLAT_QUIRK_NON_COMPLIANT_RVV
+
+/* Core platform part done, run checks before defining the
+ * platform hart irq map, so that we don't define it
+ * if PLAT_NO_IRQ is set. */
+#include <platform/utils/platform_checks.h>
+
+/* Make sure we only define this once, using NEED_HART_IRQ_MAP on init.c.
+ * The C906 PLIC exposes the M-mode external context of the application
+ * hart as context 0 (context 1 is its S-mode context, which the DTS wires
+ * to Linux). We run in M-mode, so target context 0. */
+#if defined(_IRQ_H) && !defined(PLAT_NO_IRQ) && defined(NEED_HART_INTC_MAP)
+DEFINE_PLATFORM_INTC_MAP({
+	{ .hart_id = 0, .target = { .ctx_idx = 0 } },  /* Hart 0 -> Context 0 (M-mode) */
+});
+#endif
+
+/*************\
+* PERIPHERALS *
+\*************/
+
+/*---=== UART ===---*/
+/* serial@04140000 ("snps,dw-apb-uart"), the DTS console (stdout-path =
+ * serial0). It is a DesignWare APB UART: 32-bit registers (reg-io-width =
+ * 4), word-strided (reg-shift = 2), fed by a 25MHz reference clock
+ * (clock-frequency = 0x17d7840). PLIC source 0x2c (44), level-high. */
+#define PLAT_UART_BASE		0x04140000
+#define PLAT_UART_CLOCK_HZ	25000000
+#define PLAT_UART_BAUD_RATE	115200
+#define PLAT_UART_REG_SHIFT	2
+#define	PLAT_UART_SHIFTED_IO	1
+#define PLAT_UART_IRQ		44
+
+/* Select the DesignWare APB UART code paths in the shared 8250/16550
+ * driver (busy-safe LCR programming, fractional DLF divisor, busy-detect
+ * interrupt handling). */
+#define PLAT_UART_DW_APB	1
+
+/*---=== Ethernet ===---*/
+/* ethernet@4070000 ("cvitek,ethernet", a Synopsys DesignWare GMAC/stmmac),
+ * PLIC source 0x1f (31), level-high. */
+#define PLAT_GMAC_BASE		0x04070000
+#define PLAT_GMAC_IRQ		31
+
+#endif /* _PLATFORM_H */
