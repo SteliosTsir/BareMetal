@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <target_config.h>		/* For PLAT_QUIRK_* */
 #include <platform/riscv/caps.h>	/* For CAP_* macros */
 #include <platform/riscv/csr.h>		/* For CSR numbers and ops */
 #include <platform/riscv/hart.h>	/* For hart_state and definitions */
@@ -395,11 +396,21 @@ __hpm_done:
 }
 
 /* Get VLEN in bytes and store as a shift value to save space.
- * vlenb = 1 << vlenb_shift, where vlenb_shift is in range [4-13]. */
+ * vlenb = 1 << vlenb_shift, where vlenb_shift is in range [4-13];
+ * vlenb_shift == 0 means "no / unknown VLEN". */
 static void
 hart_probe_vlenb(struct hart_state *hs)
 {
 	struct rvcaps *caps = hs->caps;
+
+	/* VLENB (CSR 0xc22) is a ratified-RVV register. A core that advertises
+	 * misa.V but implements a non-compliant vector (e.g. the T-Head 0.7.1
+	 * draft) does not have it: the read would trap, get skipped, and leave
+	 * a garbage VLEN. Mark VLEN unknown (shift 0) and don't probe. */
+#if defined(PLAT_QUIRK_NON_COMPLIANT_RVV)
+	caps->vlenb_shift = 0;
+	return;
+#else
 	uint64_t vlenb = csr_read(CSR_VLENB);
 
 	/* VLEN must be a power of 2, so vlenb must also be a power of 2.
@@ -412,6 +423,7 @@ hart_probe_vlenb(struct hart_state *hs)
 		shift++;
 	}
 	caps->vlenb_shift = shift;
+#endif
 }
 
 

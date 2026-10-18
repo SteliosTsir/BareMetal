@@ -102,8 +102,25 @@ ___num_harts = PLAT_MAX_HARTS;
 #define PLAT_APLIC_FORCE_DIRECT 0
 
 /* Quirks */
+
+/* Never emit the WFI instruction (fall back to a pause()/spin). Use on
+ * cores where WFI traps, is unimplemented in a harmful way, or otherwise
+ * misbehaves instead of simply acting as a NOP. */
 //#define PLAT_NO_WFI
+
+/* Workaround for a hardware bug where WFI advances mepc by 8-12 bytes
+ * instead of 4, so execution resumes past the following instruction(s) and
+ * hangs/misbehaves. Pads the WFI with extra NOPs to absorb the overshoot. */
 //#define PLAT_QUIRK_WFI_EPC
+
+/* The hart sets misa.V but does NOT implement the ratified RVV 1.0 (e.g.
+ * the T-Head C906, which has the incompatible 0.7.1 draft vector: a
+ * different CSR map - no vstart/vcsr - and different instruction
+ * encodings). With this set, hart_init_vpu() skips the RVV 1.0 reset
+ * sequence and leaves the vector unit off (mstatus.VS = 0); otherwise that
+ * sequence would hit an illegal-instruction trap (the vsetvli is an OP-V,
+ * non-SYSTEM opcode, so it is not skippable) and hang the hart. */
+//#define PLAT_QUIRK_NON_COMPLIANT_RVV
 
 /* Core platform part done, run checks before defining the
  * platform hart irq map, so that we don't define it

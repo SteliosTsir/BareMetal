@@ -132,6 +132,15 @@ FUNC_END hart_init_fpu
  * a1: cached misa
  */
 FUNC_START hart_init_vpu
+#if defined(PLAT_QUIRK_NON_COMPLIANT_RVV)
+	/* This hart advertises misa.V but does NOT implement the ratified
+	 * RVV 1.0 (e.g. the T-Head C906, which has the incompatible 0.7.1
+	 * draft vector: different CSR map - no vstart/vcsr here - and
+	 * different instruction encodings). Running the RVV 1.0 reset
+	 * sequence below would hit "unimplemented CSR"/illegal-instruction
+	 * traps, so leave the vector unit untouched with mstatus.VS = 0. */
+	ret
+#else
 	RET_IF_NOT_IN_MISA CSR_MISA_V
 
 	/* Enable VPU on mstatus */
@@ -157,6 +166,7 @@ FUNC_START hart_init_vpu
 	li	t0, CSR_MSTATUS_V_CLEAN
 	csrc	mstatus, t0
 	ret
+#endif /* PLAT_QUIRK_NON_COMPLIANT_RVV */
 FUNC_END hart_init_vpu
 
 /*
