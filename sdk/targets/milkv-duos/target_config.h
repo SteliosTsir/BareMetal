@@ -156,6 +156,12 @@ ___num_harts = PLAT_MAX_HARTS;
  * VPU init entirely and leave the vector unit off (mstatus.VS = 0). */
 #define PLAT_QUIRK_NON_COMPLIANT_RVV
 
+/* The C906's DMA masters are not coherent with the D-cache, and this core
+ * predates ratified Zicbom - it provides T-Head's custom cache ops instead
+ * (same vintage as the non-compliant RVV above). Select that CMO backend for
+ * the DMA cache-maintenance API (see platform/include/riscv/cache.h). */
+#define PLAT_QUIRK_THEAD_CMO
+
 /* Core platform part done, run checks before defining the
  * platform hart irq map, so that we don't define it
  * if PLAT_NO_IRQ is set. */
@@ -193,9 +199,15 @@ DEFINE_PLATFORM_INTC_MAP({
 #define PLAT_UART_DW_APB	1
 
 /*---=== Ethernet ===---*/
-/* ethernet@4070000 ("cvitek,ethernet", a Synopsys DesignWare GMAC/stmmac),
- * PLIC source 0x1f (31), level-high. */
-#define PLAT_GMAC_BASE		0x04070000
-#define PLAT_GMAC_IRQ		31
+/* ethernet@4070000 ("cvitek,ethernet"): a Synopsys DesignWare GMAC, the
+ * dwmac-1000 generation (version register reads 0x1037 = v3.70a), driven by
+ * the generic dwmac3 driver. The MAC's 100M port is wired over RMII to the
+ * SoC's internal ePHY (powered up and calibrated in platform_init.c below).
+ * PLIC source 0x1f (31), level-high - unused, the driver polls. */
+#define PLAT_DWMAC3_BASE_ADDR	0x04070000
+#define PLAT_DWMAC3_IRQ		31
+/* CSR (application) clock feeding the MAC - eth_csrclk, a fixed 250MHz in the
+ * board DTS. The driver derives the MDC/MDIO clock divider from it. */
+#define PLAT_DWMAC3_CSR_CLOCK_HZ	250000000
 
 #endif /* _PLATFORM_H */

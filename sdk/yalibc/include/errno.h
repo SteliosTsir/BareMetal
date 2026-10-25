@@ -62,6 +62,7 @@ int *__errno_location(void);
 #define EADDRINUSE	98	/* Address already in use */
 #define EADDRNOTAVAIL	99	/* Cannot assign requested address */
 #define EDESTADDRREQ	89	/* Destination address required */
+#define ENETDOWN	100	/* Network is down */
 #define EHOSTDOWN	112	/* Host is down */
 #define EHOSTUNREACH	113	/* No route to host */
 

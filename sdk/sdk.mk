@@ -31,7 +31,11 @@ YALIBC_OBJS = $(patsubst yalibc/src/%.c,$(YALIBC_OBJ_DIR)/%.o,$(YALIBC_SOURCES))
 define PLATFORM_OBJS
 PLATFORM_C_OBJS_$(1) = $$(patsubst platform/src/%.c,$$(PLATFORM_OBJ_DIR)/%.$(1).o,$$(PLATFORM_C_SOURCES))
 PLATFORM_S_OBJS_$(1) = $$(patsubst platform/src/%.S,$$(PLATFORM_OBJ_DIR)/%.$(1).S.o,$$(PLATFORM_S_SOURCES))
-ALL_OBJS_$(1) = $$(YALIBC_OBJS) $$(PLATFORM_C_OBJS_$(1)) $$(PLATFORM_S_OBJS_$(1))
+# Optional target-specific sources (e.g. a platform_init() override). Any .c
+# under targets/<target>/ is compiled into that target's platform library.
+TARGET_C_SOURCES_$(1) = $$(wildcard $$(SDK_TARGETS_DIR)/$(1)/*.c)
+TARGET_C_OBJS_$(1) = $$(patsubst $$(SDK_TARGETS_DIR)/$(1)/%.c,$$(PLATFORM_OBJ_DIR)/target_$(1)_%.o,$$(TARGET_C_SOURCES_$(1)))
+ALL_OBJS_$(1) = $$(YALIBC_OBJS) $$(PLATFORM_C_OBJS_$(1)) $$(PLATFORM_S_OBJS_$(1)) $$(TARGET_C_OBJS_$(1))
 endef
 
 $(foreach target,$(ALL_TARGETS),$(eval $(call PLATFORM_OBJS,$(target))))
@@ -160,6 +164,11 @@ $$(PLATFORM_OBJ_DIR)/%.$(1).o: platform/src/%.c | $$(PLATFORM_OBJ_DIR) $$(BUILD_
 # Build platform assembly objects for $(1)
 $$(PLATFORM_OBJ_DIR)/%.$(1).S.o: platform/src/%.S | $$(PLATFORM_OBJ_DIR) $$(BUILD_DIR)
 	$$(MSG) "  [AS]   $$@"
+	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -c $$< -o $$@
+
+# Build target-specific C objects for $(1) (targets/$(1)/*.c)
+$$(PLATFORM_OBJ_DIR)/target_$(1)_%.o: $$(SDK_TARGETS_DIR)/$(1)/%.c | $$(PLATFORM_OBJ_DIR) $$(BUILD_DIR)
+	$$(MSG) "  [CC]   $$@"
 	$$(Q)$$(CC) $$(SDK_CFLAGS) -I $$(SDK_TARGETS_DIR)/$(1) -c $$< -o $$@
 
 # Create library for $(1)
