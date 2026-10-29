@@ -65,6 +65,12 @@
 #define CAP_ZKR		BIT_ULL(4)
 
 /*
+ * Unprivileged Caps / exts 
+ */
+#define CAP_ZBA		BIT_ULL(5)		 /* Zba (part of B) */
+#define CAP_ZBB		BIT_ULL(6)		 /* Zbb (part of B) */
+
+/*
  * Capabilities / extensions that don't fit elsewhere
  */
 
@@ -90,7 +96,7 @@
  * Sub-extensions:
  * Zicsr, Zifencei (used to be part of I)
  * Zaamo, Zalrsc (part of A)
- * Zba/b/s (part of B)
+ * Zbs (part of B)
  * Zmmul (part of M -M without div, for embedded-)
  *
  * Other extensions:

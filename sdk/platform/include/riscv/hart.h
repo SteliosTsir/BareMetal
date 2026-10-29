@@ -75,10 +75,11 @@ struct hart_state {
 } __attribute__((aligned(8)));
 
 enum state_flags {
-	HS_FLAG_READY		= BIT(0),
-	HS_FLAG_RUNNING		= BIT(1),
-	HS_FLAG_SLEEPING	= BIT(2),
-	HS_FLAG_CAPS_IS_PTR	= BIT(3)
+	HS_FLAG_READY			= BIT(0),
+	HS_FLAG_RUNNING			= BIT(1),
+	HS_FLAG_SLEEPING		= BIT(2),
+	HS_FLAG_CAPS_IS_PTR		= BIT(3),
+	HS_FLAG_PROBING_UNPRIV 	= BIT(4)
 };
 
 /* Static assert to ensure size */
