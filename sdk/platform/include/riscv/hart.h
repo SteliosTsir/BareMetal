@@ -298,6 +298,9 @@ int hart_va_map_range(uintptr_t phys_addr, size_t *size, uint64_t mode, bool nap
 /* Hart probing facility in hart_probe.c */
 void hart_probe_priv_caps(struct rvcaps *caps);
 
+/* Unprivileged extension probing in hart_probe_unpriv.c */
+void hart_probe_unpriv_caps(struct rvcaps *caps);
+
 /* Entry points on hart.c */
 void hart_init(void);
 void hart_configure_imsic_eiid(uint16_t hart_idx, uint16_t eiid, bool enable);
